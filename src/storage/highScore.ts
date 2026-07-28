@@ -1,4 +1,4 @@
-const KEY = 'color_gate_rush_high_score'
+const KEY = 'wall_run_switch_high_score'
 
 export async function loadHighScore(): Promise<number> {
   try {

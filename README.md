@@ -1,16 +1,16 @@
-# Color Gate Rush
+# Wall Run Switch
 
-Neon **3-color cube gate** reflex game. Offline, no backend, no accounts.
+Endless **neon wall-run** game. Stick to the **left** or **right** wall, switch height lanes, jump barriers, and **flip across the corridor** to dodge wall-side hazards.
 
-You are a cube with three faces ? **Cyan**, **Magenta**, **Gold**. Gates rush toward you down a tunnel. Cycle your face to match before impact. Chain perfects for multipliers. Dual rings force quick double-cycles late-game.
+Offline web game ? **no backend**, no accounts. High score stays in `localStorage`.
 
 ## Stack
 
 - **Next.js** (App Router) + React
 - Pure TypeScript game engine
-- Canvas 2D neon tunnel renderer
-- Web Audio procedural SFX (no asset files)
-- Local high score in `localStorage`
+- Canvas 2D neon corridor renderer
+- Web Audio procedural SFX
+- Local high score only
 
 ## Run
 
@@ -23,43 +23,37 @@ Open [http://localhost:3000](http://localhost:3000).
 
 ## Controls
 
-| Action | Input |
-|--------|--------|
-| Cycle color forward | Click / tap / Space / ? / W / ? / D |
-| Cycle color back | ? / A |
-| Pause | P / Esc |
-| Start / Restart | Buttons or Space on menu |
+| Action | Keyboard | Touch |
+|--------|----------|-------|
+| Height up | W / ? | Swipe up |
+| Height down | S / ? | Swipe down |
+| **Flip wall** | Space / F | Tap |
+| Jump | E / Shift | Double-tap or second button (or hold-flip uses Space for flip; jump = swipe toward center optional) |
+| Pause | P / Esc | Pause button |
+
+> Jump: **E** or **Shift**. Flip: **Space** / **F** / tap.
 
 ## Gameplay
 
-- Three faces: **Cyan ? Magenta ? Gold**
-- Match the gate color at the hit plane or die
-- **Perfect** = clutch cycle in the thin window ? combo + score bonus
-- **Dual gates** (later): outer then inner ring ? cycle if colors differ
-- Speed and spawn density ramp up
-- Score = survival + gates cleared + combo multipliers
+- Auto-run down a neon corridor stuck to one wall
+- **Walls** (solid blocks) ? change height lane **or** flip to the other wall
+- **Barriers** (low beams) ? jump while on that wall
+- **Gaps** ? flip before you fall into the void
+- Hazards live on a wall; the opposite wall is often free
+- Score = distance + coins + flip bonuses
 
 ## Architecture
 
 ```
 src/
   app/           # Next.js shell
-  components/    # Canvas, HUD, app shell
-  game/          # constants, spawn, engine, renderer
-  audio/         # procedural Web Audio
-  storage/       # localStorage high score + mute
+  components/    # Canvas, HUD
+  game/          # constants, segments, engine, renderer
+  audio/         # procedural SFX
+  storage/       # localStorage
 ```
-
-## Scripts
-
-| Command | Description |
-|---------|-------------|
-| `npm run dev` | Dev server |
-| `npm run build` | Production build |
-| `npm start` | Serve production build |
 
 ## Notes
 
-- Clearing site data resets the local high score
-- First sound unlocks after a user gesture
 - No accounts, leaderboard, or network calls
+- Clearing site data resets local high score

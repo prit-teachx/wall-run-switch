@@ -1,83 +1,63 @@
 /**
- * Color Gate Rush ? shared game constants
+ * Wall Run Switch ? shared game constants
  */
 
-/** Active cube face colors (3 faces). */
-export const FACES = {
-  CYAN: 0,
-  MAGENTA: 1,
-  GOLD: 2,
+export const HEIGHT_LANES = 3
+export const HEIGHT_POSITIONS = [-1.15, 0, 1.15] as const
+export const START_HEIGHT = 1
+
+/** Corridor half-width (player sits at ?WALL_X). */
+export const WALL_X = 1.35
+
+export type WallSide = 'left' | 'right'
+
+export const SEGMENT_LENGTH = 22
+export const SEGMENTS_AHEAD = 14
+export const SEGMENTS_BEHIND = 2
+
+export const PLAYER_SIZE = 0.85
+export const JUMP_VELOCITY = 9.5
+export const GRAVITY = 26
+export const HEIGHT_SWITCH_SPEED = 14
+export const FLIP_DURATION = 0.32
+export const FLIP_COOLDOWN = 0.18
+
+export const BASE_SPEED = 20
+export const MAX_SPEED = 40
+export const SPEED_RAMP = 0.05
+
+export const OBSTACLE_TYPES = {
+  WALL: 'wall',
+  BARRIER: 'barrier',
 } as const
 
-export type Face = (typeof FACES)[keyof typeof FACES]
+export type ObstacleType = (typeof OBSTACLE_TYPES)[keyof typeof OBSTACLE_TYPES]
 
-export const FACE_COUNT = 3
+export const COIN_POINTS = 50
+export const DISTANCE_SCORE_RATE = 1
+export const FLIP_BONUS_POINTS = 6
 
-export const FACE_NAMES: Record<Face, string> = {
-  [FACES.CYAN]: 'CYAN',
-  [FACES.MAGENTA]: 'MAGENTA',
-  [FACES.GOLD]: 'GOLD',
-}
-
-export const START_FACE: Face = FACES.CYAN
-
-export const ALL_FACES: Face[] = [FACES.CYAN, FACES.MAGENTA, FACES.GOLD]
-
-/** Depth along the tunnel: 0 = far spawn, 1 = player hit plane. */
-export const GATE_SPAWN_DEPTH = 0
-export const GATE_HIT_DEPTH = 1
-export const GATE_DESPAWN_DEPTH = 1.12
-
-/** Approach rate (depth units per second). */
-export const BASE_APPROACH = 0.36
-export const MAX_APPROACH = 0.9
-export const APPROACH_RAMP = 0.011
-
-/** Beat / BPM. */
-export const BASE_BPM = 104
-export const MAX_BPM = 180
-export const BPM_RAMP = 0.52
-
-/** Spawn spacing in beats. */
-export const SPAWN_BEATS_START = 2.5
-export const SPAWN_BEATS_MIN = 0.9
-
-/** Perfect / judge windows. */
-export const PERFECT_DEPTH = 0.055
-export const JUDGE_EARLY = 0.045
-export const JUDGE_LATE = 0.03
-
-/** Score. */
-export const SURVIVAL_SCORE_RATE = 12
-export const GATE_PASS_POINTS = 100
-export const DUAL_PASS_BONUS = 50
-export const PERFECT_BONUS = 80
-export const COMBO_STEP_BONUS = 18
-export const MAX_COMBO_MULT = 10
-
+export const NEAR_MISS_Z = 1.5
+export const NEAR_MISS_COOLDOWN = 0.45
 export const DEATH_HOLD_DURATION = 0.9
-export const SPAWN_PROTECT = 1.15
-
-/** Dual-gate chance ramps with difficulty. */
-export const DUAL_GATE_BASE = 0.04
-export const DUAL_GATE_MAX = 0.32
+export const SPAWN_PROTECT = 0.45
 
 export const COLORS = {
-  bg: '#050512',
-  fog: '#0a0a20',
-  cyan: '#00f0ff',
-  cyanSoft: '#00f0ff88',
-  cyanGlow: '#00ffcc',
-  magenta: '#ff00aa',
-  magentaSoft: '#ff00aa88',
-  magentaGlow: '#ff44cc',
-  gold: '#ffd700',
-  goldSoft: '#ffd70088',
-  goldGlow: '#ffee66',
+  bg: '#060510',
+  fog: '#0c0a1c',
+  leftWall: '#0a1830',
+  rightWall: '#1a0a28',
+  leftEdge: '#00f0ff',
+  rightEdge: '#ff00aa',
+  player: '#00ffcc',
+  playerRight: '#ff88dd',
+  wall: '#ff3366',
+  barrier: '#ffaa00',
+  coin: '#ffd700',
+  gap: '#020208',
   white: '#e8ffff',
   danger: '#ff3366',
-  road: '#12122a',
-  panel: 'rgba(8, 12, 32, 0.82)',
+  gold: '#ffd700',
 } as const
 
 export type GameStatus =
@@ -87,43 +67,13 @@ export type GameStatus =
   | 'dying'
   | 'gameover'
 
-export type DeathCause = 'wrong_color' | 'unknown'
+export type DeathCause = 'wall' | 'barrier' | 'gap' | 'unknown'
 
 export const GAME_OVER_TIPS = [
-  'Three faces ? cycle through Cyan, Magenta, Gold. Don?t overshoot.',
-  'Watch far gates. Plan one cycle ahead when colors chain.',
-  'Perfects need a clutch cycle in the thin glow band.',
-  'Dual rings: match outer first, then inner if different.',
-  'Already matching? Stay. Extra cycles break combos.',
-  '? / A cycles back. Use it when you overshoot by one face.',
+  'Flip early when your wall is packed. The other side is often clear.',
+  'Barriers need a jump on that wall. Walls need a height change or a flip.',
+  'Gaps only kill the wall they cut ? flip before you hit the void.',
+  'Center height is safer early. Move only when you must.',
+  'Tap flips. E / Shift jumps. Don?t mix them up mid-panic.',
+  'Look two hazards ahead on both walls.',
 ] as const
-
-export function faceColor(face: Face, soft = false): string {
-  switch (face) {
-    case FACES.CYAN:
-      return soft ? COLORS.cyanSoft : COLORS.cyan
-    case FACES.MAGENTA:
-      return soft ? COLORS.magentaSoft : COLORS.magenta
-    default:
-      return soft ? COLORS.goldSoft : COLORS.gold
-  }
-}
-
-export function faceGlow(face: Face): string {
-  switch (face) {
-    case FACES.CYAN:
-      return COLORS.cyanGlow
-    case FACES.MAGENTA:
-      return COLORS.magentaGlow
-    default:
-      return COLORS.goldGlow
-  }
-}
-
-export function nextFace(face: Face): Face {
-  return ((face + 1) % FACE_COUNT) as Face
-}
-
-export function prevFace(face: Face): Face {
-  return ((face + FACE_COUNT - 1) % FACE_COUNT) as Face
-}

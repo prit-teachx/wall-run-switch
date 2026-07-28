@@ -1,8 +1,4 @@
-/**
- * Procedural Web Audio SFX for Color Gate Rush.
- */
-
-export type GameSfx = 'cycle' | 'pass' | 'perfect' | 'crash' | 'beat' | 'dual'
+export type GameSfx = 'flip' | 'jump' | 'coin' | 'crash' | 'nearMiss' | 'beat'
 
 export const DEFAULT_MASTER_VOLUME = 0.85
 export const VOLUME_STEP = 0.1
@@ -17,7 +13,6 @@ class SoundManager {
   private unlocked = false
   private runWanted = false
   private listeners = new Set<() => void>()
-  private bpm = 104
 
   onChange(cb: () => void): () => void {
     this.listeners.add(cb)
@@ -33,23 +28,19 @@ class SoundManager {
   getMuted() {
     return this.muted
   }
-
   getVolume() {
     return this.masterVolume
   }
-
   setMuted(m: boolean) {
     this.muted = m
     this.applyGain()
     this.notify()
   }
-
   setVolume(v: number) {
     this.masterVolume = Math.max(0, Math.min(1, v))
     this.applyGain()
     this.notify()
   }
-
   toggleMute() {
     this.setMuted(!this.muted)
   }
@@ -74,9 +65,7 @@ class SoundManager {
       this.master.connect(this.ctx.destination)
       this.applyGain()
     }
-    if (this.ctx.state === 'suspended') {
-      await this.ctx.resume().catch(() => {})
-    }
+    if (this.ctx.state === 'suspended') await this.ctx.resume().catch(() => {})
     this.unlocked = true
   }
 
@@ -88,14 +77,9 @@ class SoundManager {
     this.unlocked = false
   }
 
-  setBpm(bpm: number) {
-    this.bpm = Math.max(60, Math.min(220, bpm))
-  }
-
   startRun() {
     this.runWanted = true
   }
-
   stopRun() {
     this.runWanted = false
   }
@@ -103,29 +87,27 @@ class SoundManager {
   play(sfx: GameSfx) {
     if (!this.unlocked || this.muted || !this.ctx || !this.master) return
     switch (sfx) {
-      case 'cycle':
-        this.blip(480, 0.04, 'square', 0.1)
-        this.blip(720, 0.05, 'square', 0.08, 0.02)
+      case 'flip':
+        this.blip(320, 0.06, 'square', 0.1)
+        this.blip(640, 0.08, 'square', 0.08, 0.04)
         break
-      case 'pass':
-        this.blip(440, 0.06, 'sine', 0.1)
+      case 'jump':
+        this.blip(280, 0.05, 'triangle', 0.08)
+        this.blip(420, 0.06, 'triangle', 0.06, 0.03)
         break
-      case 'dual':
-        this.blip(520, 0.05, 'triangle', 0.1)
-        this.blip(780, 0.07, 'triangle', 0.09, 0.05)
+      case 'coin':
+        this.blip(880, 0.05, 'sine', 0.1)
+        this.blip(1180, 0.06, 'sine', 0.07, 0.04)
         break
-      case 'perfect':
-        this.blip(660, 0.05, 'sine', 0.12)
-        this.blip(990, 0.08, 'triangle', 0.1, 0.04)
+      case 'nearMiss':
+        this.blip(200, 0.04, 'sawtooth', 0.05)
         break
       case 'crash':
         this.noiseBurst(0.18, 0.22)
-        this.blip(110, 0.2, 'sawtooth', 0.18)
+        this.blip(100, 0.2, 'sawtooth', 0.18)
         break
       case 'beat':
-        if (this.runWanted) this.blip(170, 0.03, 'sine', 0.035)
-        break
-      default:
+        if (this.runWanted) this.blip(160, 0.03, 'sine', 0.03)
         break
     }
   }

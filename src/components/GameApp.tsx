@@ -7,13 +7,9 @@ import { GameUI } from './GameUI'
 import { sounds } from '../audio/sounds'
 import { GameEngine, type GameSnapshot } from '../game/engine'
 import { loadHighScore, saveHighScore } from '../storage/highScore'
-import {
-  loadAudioSettings,
-  saveAudioSettings,
-} from '../storage/audioSettings'
+import { loadAudioSettings, saveAudioSettings } from '../storage/audioSettings'
 import styles from './GameApp.module.css'
 
-/** Offline Color Gate Rush shell ? no backend. */
 export function GameApp() {
   const engine = useMemo(() => new GameEngine(), [])
   const [snap, setSnap] = useState<GameSnapshot>(() => engine.snapshot())
@@ -22,9 +18,7 @@ export function GameApp() {
 
   useEffect(() => {
     void sounds.load()
-    return () => {
-      sounds.dispose()
-    }
+    return () => sounds.dispose()
   }, [])
 
   useEffect(() => {
@@ -69,33 +63,28 @@ export function GameApp() {
       if (s.status === 'gameover' && s.isNewHighScore) {
         saveHighScore(s.highScore).catch(() => {})
       }
-      if (s.status === 'playing') {
-        sounds.setBpm(s.bpm)
-      }
     })
 
     const unsubEvents = engine.onEvent((event) => {
       switch (event.type) {
-        case 'cycle':
-          sounds.play('cycle')
+        case 'flip':
+          sounds.play('flip')
           try {
-            if (typeof navigator !== 'undefined' && navigator.vibrate) {
-              navigator.vibrate(10)
-            }
+            navigator.vibrate?.(12)
           } catch {
             /* ignore */
           }
           break
-        case 'gatePass':
-          if (event.dual) sounds.play('dual')
-          else sounds.play(event.perfect ? 'perfect' : 'pass')
-          if (event.perfect) sounds.play('perfect')
+        case 'jump':
+          sounds.play('jump')
+          break
+        case 'coin':
+          sounds.play('coin')
           break
         case 'nearMiss':
+          sounds.play('nearMiss')
           try {
-            if (typeof navigator !== 'undefined' && navigator.vibrate) {
-              navigator.vibrate(14)
-            }
+            navigator.vibrate?.(10)
           } catch {
             /* ignore */
           }
@@ -103,23 +92,16 @@ export function GameApp() {
         case 'crash':
           sounds.play('crash')
           try {
-            if (typeof navigator !== 'undefined' && navigator.vibrate) {
-              navigator.vibrate([30, 40, 30])
-            }
+            navigator.vibrate?.([30, 40, 30])
           } catch {
             /* ignore */
           }
-          break
-        case 'beat':
-          sounds.play('beat')
           break
         case 'runStart':
           sounds.startRun()
           break
         case 'runStop':
           sounds.stopRun()
-          break
-        default:
           break
       }
     })
@@ -147,22 +129,6 @@ export function GameApp() {
     fn()
   }, [])
 
-  const onStart = useCallback(() => {
-    void unlockAnd(() => engine.startGame())
-  }, [engine, unlockAnd])
-
-  const onResume = useCallback(() => {
-    void unlockAnd(() => engine.resumeGame())
-  }, [engine, unlockAnd])
-
-  const onPause = useCallback(() => engine.pauseGame(), [engine])
-  const onRestart = useCallback(() => {
-    void unlockAnd(() => engine.startGame())
-  }, [engine, unlockAnd])
-  const onToggleMute = useCallback(() => {
-    void unlockAnd(() => sounds.toggleMute())
-  }, [unlockAnd])
-
   return (
     <ErrorBoundary>
       <div className={styles.root}>
@@ -170,11 +136,11 @@ export function GameApp() {
         <GameUI
           snap={snap}
           muted={muted}
-          onStart={onStart}
-          onResume={onResume}
-          onPause={onPause}
-          onRestart={onRestart}
-          onToggleMute={onToggleMute}
+          onStart={() => void unlockAnd(() => engine.startGame())}
+          onResume={() => void unlockAnd(() => engine.resumeGame())}
+          onPause={() => engine.pauseGame()}
+          onRestart={() => void unlockAnd(() => engine.startGame())}
+          onToggleMute={() => void unlockAnd(() => sounds.toggleMute())}
         />
       </div>
     </ErrorBoundary>

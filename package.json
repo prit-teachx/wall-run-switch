@@ -1,8 +1,8 @@
 {
-  "name": "color-gate-rush",
+  "name": "wall-run-switch",
   "version": "1.0.0",
   "private": true,
-  "description": "Neon 3-color cube gate rush ? Next.js, offline, no backend",
+  "description": "Endless neon wall-run switcher ? flip left/right walls, offline, no backend",
   "scripts": {
     "dev": "next dev",
     "build": "next build",

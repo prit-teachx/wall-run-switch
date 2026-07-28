@@ -1,115 +1,118 @@
 import {
-  APPROACH_RAMP,
-  BASE_APPROACH,
-  BASE_BPM,
-  BPM_RAMP,
-  COMBO_STEP_BONUS,
+  BASE_SPEED,
+  COIN_POINTS,
   DEATH_HOLD_DURATION,
-  DUAL_PASS_BONUS,
-  GATE_DESPAWN_DEPTH,
-  GATE_HIT_DEPTH,
-  GATE_PASS_POINTS,
+  DISTANCE_SCORE_RATE,
+  FLIP_BONUS_POINTS,
+  FLIP_COOLDOWN,
+  FLIP_DURATION,
   GAME_OVER_TIPS,
-  JUDGE_EARLY,
-  JUDGE_LATE,
-  MAX_APPROACH,
-  MAX_BPM,
-  MAX_COMBO_MULT,
-  PERFECT_BONUS,
-  PERFECT_DEPTH,
-  SPAWN_BEATS_MIN,
-  SPAWN_BEATS_START,
+  GRAVITY,
+  HEIGHT_LANES,
+  HEIGHT_POSITIONS,
+  HEIGHT_SWITCH_SPEED,
+  JUMP_VELOCITY,
+  MAX_SPEED,
+  NEAR_MISS_COOLDOWN,
+  NEAR_MISS_Z,
+  OBSTACLE_TYPES,
+  PLAYER_SIZE,
+  SEGMENT_LENGTH,
+  SEGMENTS_AHEAD,
+  SEGMENTS_BEHIND,
   SPAWN_PROTECT,
-  START_FACE,
-  SURVIVAL_SCORE_RATE,
-  nextFace,
-  prevFace,
+  SPEED_RAMP,
+  START_HEIGHT,
+  WALL_X,
   type DeathCause,
-  type Face,
   type GameStatus,
+  type WallSide,
 } from './constants'
 import {
-  activeRequiredFace,
-  createGate,
+  buildInitialSegments,
   createRunSeed,
-  makeRand,
-  resetGateSeq,
-  type GateData,
-} from './spawn'
+  generateSegment,
+  obstacleHalfExtents,
+  type SegmentData,
+} from './segments'
+
+export type CollectedMap = Record<string, true>
 
 export interface GameSnapshot {
   status: GameStatus
   score: number
+  coins: number
+  distance: number
   highScore: number
   isNewHighScore: boolean
   runId: number
-  face: Face
-  combo: number
-  maxCombo: number
-  gatesCleared: number
-  perfects: number
-  dualsCleared: number
-  bpm: number
-  beatPhase: number
-  timeSurvived: number
   deathCause: DeathCause | null
   scoreDeltaToBest: number
   tipIndex: number
-  switchFlash: number
-  perfectFlash: number
-  /** Next unresolved gate required face (for HUD preview). */
-  nextRequired: Face | null
-  nextIsDual: boolean
+  wall: WallSide
+  heightLane: number
+  flips: number
+  flipT: number
 }
 
 export type SnapshotListener = (snap: GameSnapshot) => void
 
 export type GameEvent =
-  | { type: 'cycle'; face: Face; dir: 1 | -1 }
-  | { type: 'gatePass'; perfect: boolean; combo: number; dual: boolean }
+  | { type: 'coin' }
   | { type: 'nearMiss' }
   | { type: 'crash'; cause: DeathCause }
-  | { type: 'beat' }
+  | { type: 'flip' }
+  | { type: 'jump' }
   | { type: 'runStart' }
   | { type: 'runStop' }
 
 export type GameEventListener = (event: GameEvent) => void
 
 /**
- * Pure Color Gate Rush simulation ? no React / canvas.
+ * Pure Wall Run Switch simulation.
+ * Player sticks to left/right wall; flip crosses the corridor.
+ * Height lanes 0..2 on the wall; jump clears barriers.
  */
 export class GameEngine {
   status: GameStatus = 'start'
   score = 0
+  coins = 0
+  distance = 0
   highScore = 0
   isNewHighScore = false
   runId = 0
-  face: Face = START_FACE
-  combo = 0
-  maxCombo = 0
-  gatesCleared = 0
-  perfects = 0
-  dualsCleared = 0
-  bpm = BASE_BPM
-  beatPhase = 0
-  timeSurvived = 0
-  approach = BASE_APPROACH
-  gates: GateData[] = []
+  runSeed = createRunSeed()
+  segments: SegmentData[] = buildInitialSegments(SEGMENTS_AHEAD, this.runSeed)
+  speed = BASE_SPEED
+
+  playerZ: number = 0
+  /** World X; ?WALL_X when grounded on a wall. */
+  playerX: number = -WALL_X
+  /** World Y height on wall. */
+  playerY: number = HEIGHT_POSITIONS[START_HEIGHT]!
+  wall: WallSide = 'left'
+  heightLane = START_HEIGHT
+  velY: number = 0
+  grounded = true
+  flips = 0
+  flipCooldown = 0
+  /** 0 = not flipping; 0..1 during flip. */
+  flipT: number = 0
+  flipFromX: number = 0
+  flipToX: number = 0
+  jumpQueued = false
+  collectedCoins: CollectedMap = {}
+  maxSegmentIndex = SEGMENTS_AHEAD
+  solidsLeft = 99
+  solidsRight = 99
+  spawnProtectUntil = 0
+
   deathCause: DeathCause | null = null
   deathHoldLeft = 0
   tipIndex = 0
-  switchFlash = 0
-  perfectFlash = 0
-
   private highScoreAtRunStart = 0
-  private runSeed = 0
-  private rand: () => number = () => Math.random()
-  private lastSpawnFace: Face | null = null
-  private beatsUntilSpawn = 1.2
-  private beatCarry = 0
-  private spawnProtectLeft = 0
-  private lastBeatIndex = -1
-  private lastCycleAt = -999
+  private nearMissCooldown = 0
+  private nearMissSeen = new Set<string>()
 
   private listeners = new Set<SnapshotListener>()
   private eventListeners = new Set<GameEventListener>()
@@ -139,305 +142,532 @@ export class GameEngine {
     this.emit(true)
   }
 
-  private peekNext(): GateData | null {
-    let best: GateData | null = null
-    for (const g of this.gates) {
-      if (g.resolved) continue
-      if (!best || g.depth > best.depth) best = g
-    }
-    return best
-  }
-
   snapshot(): GameSnapshot {
     const prevBest = this.highScoreAtRunStart || this.highScore
-    const next = this.peekNext()
     return {
       status: this.status,
       score: this.score,
+      coins: this.coins,
+      distance: this.distance,
       highScore: this.highScore,
       isNewHighScore: this.isNewHighScore,
       runId: this.runId,
-      face: this.face,
-      combo: this.combo,
-      maxCombo: this.maxCombo,
-      gatesCleared: this.gatesCleared,
-      perfects: this.perfects,
-      dualsCleared: this.dualsCleared,
-      bpm: this.bpm,
-      beatPhase: this.beatPhase,
-      timeSurvived: this.timeSurvived,
       deathCause: this.deathCause,
       scoreDeltaToBest: Math.floor(this.score) - prevBest,
       tipIndex: this.tipIndex,
-      switchFlash: this.switchFlash,
-      perfectFlash: this.perfectFlash,
-      nextRequired: next ? activeRequiredFace(next) : null,
-      nextIsDual: next?.isDual ?? false,
+      wall: this.wall,
+      heightLane: this.heightLane,
+      flips: this.flips,
+      flipT: this.flipT,
     }
   }
 
   private emit(force = false) {
     const now = Date.now()
-    if (!force && now - this.lastEmit < 50) return
+    if (
+      !force &&
+      (this.status === 'playing' || this.status === 'dying') &&
+      now - this.lastEmit < 80
+    ) {
+      return
+    }
     this.lastEmit = now
-    const snap = this.snapshot()
-    for (const fn of this.listeners) fn(snap)
+    for (const fn of this.listeners) fn(this.snapshot())
+  }
+
+  resetRun() {
+    const seed = createRunSeed()
+    this.runSeed = seed
+    this.maxSegmentIndex = SEGMENTS_AHEAD
+    this.segments = buildInitialSegments(SEGMENTS_AHEAD, seed)
+    this.solidsLeft = 99
+    this.solidsRight = 99
+    for (const seg of this.segments) {
+      this.solidsLeft = seg.hasLeftGap ? 0 : this.solidsLeft + 1
+      this.solidsRight = seg.hasRightGap ? 0 : this.solidsRight + 1
+    }
+    this.collectedCoins = {}
+    this.wall = 'left'
+    this.heightLane = START_HEIGHT
+    this.playerZ = 0
+    this.playerX = -WALL_X
+    this.playerY = HEIGHT_POSITIONS[START_HEIGHT]!
+    this.velY = 0
+    this.grounded = true
+    this.flips = 0
+    this.flipCooldown = 0
+    this.flipT = 0
+    this.jumpQueued = false
+    this.score = 0
+    this.coins = 0
+    this.distance = 0
+    this.speed = BASE_SPEED
+    this.isNewHighScore = false
+    this.deathCause = null
+    this.deathHoldLeft = 0
+    this.highScoreAtRunStart = this.highScore
+    this.tipIndex = this.runId % GAME_OVER_TIPS.length
+    this.spawnProtectUntil = performance.now() + SPAWN_PROTECT * 1000
+    this.nearMissCooldown = 0
+    this.nearMissSeen.clear()
+    this.runId += 1
   }
 
   startGame() {
-    this.runId += 1
-    this.highScoreAtRunStart = this.highScore
-    this.isNewHighScore = false
-    this.score = 0
-    this.face = START_FACE
-    this.combo = 0
-    this.maxCombo = 0
-    this.gatesCleared = 0
-    this.perfects = 0
-    this.dualsCleared = 0
-    this.bpm = BASE_BPM
-    this.beatPhase = 0
-    this.timeSurvived = 0
-    this.approach = BASE_APPROACH
-    this.gates = []
-    this.deathCause = null
-    this.deathHoldLeft = 0
-    this.tipIndex = Math.floor(Math.random() * GAME_OVER_TIPS.length)
-    this.switchFlash = 0
-    this.perfectFlash = 0
-    this.runSeed = createRunSeed()
-    this.rand = makeRand(this.runSeed)
-    this.lastSpawnFace = null
-    this.beatsUntilSpawn = 1.0
-    this.beatCarry = 0
-    this.spawnProtectLeft = SPAWN_PROTECT
-    this.lastBeatIndex = -1
-    this.lastCycleAt = -999
-    resetGateSeq()
+    if (this.status === 'playing' || this.status === 'dying') return
+    this.resetRun()
     this.status = 'playing'
     this.emitEvent({ type: 'runStart' })
     this.emit(true)
   }
 
   pauseGame() {
-    if (this.status !== 'playing') return
-    this.status = 'paused'
-    this.emitEvent({ type: 'runStop' })
-    this.emit(true)
+    if (this.status === 'playing') {
+      this.status = 'paused'
+      this.emitEvent({ type: 'runStop' })
+      this.emit(true)
+    }
   }
 
   resumeGame() {
-    if (this.status !== 'paused') return
-    this.status = 'playing'
-    this.emitEvent({ type: 'runStart' })
-    this.emit(true)
+    if (this.status === 'paused') {
+      this.status = 'playing'
+      this.emitEvent({ type: 'runStart' })
+      this.emit(true)
+    }
   }
 
-  /** Cycle cube face forward (0?1?2?0). */
-  cycleForward() {
-    this.cycle(1)
+  togglePause() {
+    if (this.status === 'playing') this.pauseGame()
+    else if (this.status === 'paused') this.resumeGame()
   }
 
-  /** Cycle cube face backward. */
-  cycleBack() {
-    this.cycle(-1)
+  goUp() {
+    if (this.status !== 'playing' || this.flipT > 0) return
+    this.heightLane = Math.min(HEIGHT_LANES - 1, this.heightLane + 1)
   }
 
-  private cycle(dir: 1 | -1) {
+  goDown() {
+    if (this.status !== 'playing' || this.flipT > 0) return
+    this.heightLane = Math.max(0, this.heightLane - 1)
+  }
+
+  requestJump() {
+    if (this.status !== 'playing' || this.flipT > 0) return
+    if (this.grounded) {
+      this.velY = JUMP_VELOCITY
+      this.grounded = false
+      this.jumpQueued = false
+      this.emitEvent({ type: 'jump' })
+      return
+    }
+    this.jumpQueued = true
+  }
+
+  requestFlip() {
     if (this.status !== 'playing') return
-    this.face = dir === 1 ? nextFace(this.face) : prevFace(this.face)
-    this.lastCycleAt = this.timeSurvived
-    this.switchFlash = 1
-    this.emitEvent({ type: 'cycle', face: this.face, dir })
-    this.tryPassGatesInWindow()
-    this.emit(true)
+    if (this.flipCooldown > 0 || this.flipT > 0) return
+
+    const next: WallSide = this.wall === 'left' ? 'right' : 'left'
+    this.flipFromX = this.playerX
+    this.flipToX = next === 'left' ? -WALL_X : WALL_X
+    this.wall = next
+    this.flipT = 0.001
+    this.grounded = false
+    this.jumpQueued = false
+    this.velY = 0
+    this.flipCooldown = FLIP_COOLDOWN
+    this.flips += 1
+    this.score += FLIP_BONUS_POINTS
+    this.emitEvent({ type: 'flip' })
+    this.emit(false)
   }
 
-  tick(dt: number) {
-    if (dt <= 0 || dt > 0.1) {
-      if (dt > 0.1) dt = 1 / 60
-      else return
-    }
+  private recomputeScore() {
+    const dist = Math.max(0, -this.playerZ)
+    this.distance = dist
+    this.score =
+      dist * DISTANCE_SCORE_RATE +
+      this.coins * COIN_POINTS +
+      this.flips * FLIP_BONUS_POINTS
+  }
 
-    if (this.status === 'dying') {
-      this.deathHoldLeft -= dt
-      this.switchFlash = Math.max(0, this.switchFlash - dt * 3)
-      this.perfectFlash = Math.max(0, this.perfectFlash - dt * 3)
-      if (this.deathHoldLeft <= 0) this.finishGameOver()
-      this.emit()
-      return
-    }
-
+  private collectCoin(id: string) {
     if (this.status !== 'playing') return
-
-    this.timeSurvived += dt
-    this.spawnProtectLeft = Math.max(0, this.spawnProtectLeft - dt)
-    this.switchFlash = Math.max(0, this.switchFlash - dt * 4)
-    this.perfectFlash = Math.max(0, this.perfectFlash - dt * 3.5)
-
-    const t = this.timeSurvived
-    // Breathing intensity: valleys every ~12s
-    const wave = 0.5 + 0.5 * Math.sin((t / 12) * Math.PI * 2)
-    const calm = t % 14 >= 11
-    const rampScale = calm ? 0.35 : 0.55 + 0.45 * wave
-
-    this.bpm = Math.min(MAX_BPM, BASE_BPM + t * BPM_RAMP * rampScale)
-    this.approach = Math.min(
-      MAX_APPROACH,
-      BASE_APPROACH + t * APPROACH_RAMP * rampScale
-    )
-    const difficulty01 = Math.min(
-      1,
-      (this.bpm - BASE_BPM) / (MAX_BPM - BASE_BPM)
-    )
-
-    const beatsPerSec = this.bpm / 60
-    this.beatCarry += dt * beatsPerSec
-    this.beatPhase = this.beatCarry % 1
-    const beatIndex = Math.floor(this.beatCarry)
-    if (beatIndex !== this.lastBeatIndex) {
-      this.lastBeatIndex = beatIndex
-      this.emitEvent({ type: 'beat' })
-    }
-
-    this.beatsUntilSpawn -= dt * beatsPerSec
-    const spawnInterval =
-      SPAWN_BEATS_START -
-      difficulty01 * (SPAWN_BEATS_START - SPAWN_BEATS_MIN)
-
-    while (this.beatsUntilSpawn <= 0) {
-      const gate = createGate(this.rand, this.lastSpawnFace, difficulty01)
-      this.lastSpawnFace = gate.face
-      this.gates.push(gate)
-      this.beatsUntilSpawn += spawnInterval
-    }
-
-    for (const g of this.gates) {
-      if (g.resolved) {
-        g.depth += this.approach * dt * 1.15
-        continue
-      }
-      g.depth += this.approach * dt
-    }
-
-    this.tryPassGatesInWindow()
-    for (const g of this.gates) {
-      if (g.resolved) continue
-      if (g.depth > GATE_HIT_DEPTH + JUDGE_LATE) {
-        this.resolveGate(g)
-      } else if (
-        g.depth >= GATE_HIT_DEPTH &&
-        this.face !== activeRequiredFace(g) &&
-        this.spawnProtectLeft <= 0
-      ) {
-        this.resolveGate(g)
-      }
-    }
-
-    this.gates = this.gates.filter((g) => g.depth < GATE_DESPAWN_DEPTH)
-    this.score += SURVIVAL_SCORE_RATE * dt * (1 + this.combo * 0.05)
-    this.emit()
-  }
-
-  private tryPassGatesInWindow() {
-    for (const g of this.gates) {
-      if (g.resolved) continue
-      if (g.depth < GATE_HIT_DEPTH - JUDGE_EARLY) continue
-      if (g.depth > GATE_HIT_DEPTH + JUDGE_LATE) continue
-      if (this.face === activeRequiredFace(g)) {
-        this.resolveGate(g)
-      }
-    }
-  }
-
-  private resolveGate(g: GateData) {
-    if (g.resolved) return
-
-    if (this.spawnProtectLeft > 0) {
-      g.resolved = true
-      g.passed = true
-      g.stage = 2
-      return
-    }
-
-    const required = activeRequiredFace(g)
-    if (this.face !== required) {
-      g.resolved = true
-      g.passed = false
-      this.beginDeath('wrong_color')
-      return
-    }
-
-    // Dual gate: first stage (outer) then need second pass for inner
-    if (g.isDual && g.stage === 0 && g.innerFace != null) {
-      g.stage = 1
-      // Outer cleared ? if same color as inner, auto-continue next tick;
-      // if different, player must cycle while still in window
-      if (this.face === g.innerFace) {
-        // same face: complete immediately
-        this.completeGate(g, false)
-      }
-      // else leave unresolved at stage 1 for more cycles in window
-      return
-    }
-
-    this.completeGate(g, g.isDual)
-  }
-
-  private completeGate(g: GateData, wasDual: boolean) {
-    if (g.resolved) return
-    g.resolved = true
-    g.passed = true
-    g.stage = 2
-
-    const clutch =
-      this.timeSurvived - this.lastCycleAt <= 0.45 &&
-      g.depth >= GATE_HIT_DEPTH - PERFECT_DEPTH * 3
-    const perfect = clutch
-    g.wasPerfect = perfect
-
-    this.gatesCleared += 1
-    if (wasDual || g.isDual) this.dualsCleared += 1
-    this.combo += 1
-    this.maxCombo = Math.max(this.maxCombo, this.combo)
-    if (perfect) this.perfects += 1
-
-    const mult = Math.min(MAX_COMBO_MULT, 1 + Math.floor(this.combo / 3))
-    let pts = GATE_PASS_POINTS * mult
-    pts += Math.min(this.combo, 20) * COMBO_STEP_BONUS
-    if (g.isDual) pts += DUAL_PASS_BONUS * mult
-    if (perfect) {
-      pts += PERFECT_BONUS * mult
-      this.perfectFlash = 1
-      this.emitEvent({ type: 'nearMiss' })
-    }
-    this.score += pts
-    this.emitEvent({
-      type: 'gatePass',
-      perfect,
-      combo: this.combo,
-      dual: g.isDual,
-    })
+    if (this.collectedCoins[id]) return
+    this.collectedCoins = { ...this.collectedCoins, [id]: true }
+    this.coins = Object.keys(this.collectedCoins).length
+    this.recomputeScore()
+    this.emitEvent({ type: 'coin' })
   }
 
   private beginDeath(cause: DeathCause) {
-    if (this.status === 'dying' || this.status === 'gameover') return
+    if (this.status !== 'playing') return
+    if (performance.now() < this.spawnProtectUntil) return
     this.status = 'dying'
     this.deathCause = cause
     this.deathHoldLeft = DEATH_HOLD_DURATION
-    this.combo = 0
+    this.velY = 0
+    this.jumpQueued = false
+    this.flipT = 0
+    this.recomputeScore()
+    this.score = Math.floor(this.score)
     this.emitEvent({ type: 'crash', cause })
     this.emitEvent({ type: 'runStop' })
     this.emit(true)
   }
 
-  private finishGameOver() {
+  private finalizeGameOver() {
+    if (this.status !== 'dying') return
     this.status = 'gameover'
     const final = Math.floor(this.score)
+    this.score = final
     if (final > this.highScore) {
       this.highScore = final
       this.isNewHighScore = true
     }
+    this.tipIndex = this.runId % GAME_OVER_TIPS.length
     this.emit(true)
+  }
+
+  private intensityForSegment(index: number): number {
+    if (index < 2) return 0
+    const base = Math.min(1, (index - 2) / 48)
+    const wave = 0.5 + 0.5 * Math.sin((index / 8) * Math.PI * 2)
+    const calm = index % 10 >= 7
+    if (calm) return Math.min(1, base * 0.32 + 0.05)
+    return Math.min(1, base * (0.5 + 0.5 * wave) + wave * 0.08)
+  }
+
+  private tickWorld() {
+    this.recomputeScore()
+    this.speed = Math.min(MAX_SPEED, BASE_SPEED + this.distance * SPEED_RAMP)
+    const playerSegment = Math.floor(this.distance / SEGMENT_LENGTH)
+    const needUntil = playerSegment + SEGMENTS_AHEAD
+    let segs = this.segments
+    let changed = false
+
+    if (needUntil > this.maxSegmentIndex) {
+      const i = this.maxSegmentIndex + 1
+      const prev = segs.length ? segs[segs.length - 1]! : null
+      const next = generateSegment(i, this.intensityForSegment(i), this.runSeed, {
+        prev,
+        solidsLeft: this.solidsLeft,
+        solidsRight: this.solidsRight,
+      })
+      this.solidsLeft = next.hasLeftGap ? 0 : this.solidsLeft + 1
+      this.solidsRight = next.hasRightGap ? 0 : this.solidsRight + 1
+      segs = segs.concat(next)
+      this.maxSegmentIndex = i
+      changed = true
+    }
+
+    const minKeep = playerSegment - SEGMENTS_BEHIND
+    if (segs.length > 0 && segs[0]!.index < minKeep) {
+      segs = segs.slice(1)
+      changed = true
+    }
+    if (changed) this.segments = segs
+  }
+
+  private overGap(wall: WallSide, z: number, prevZ?: number): boolean {
+    for (const seg of this.segments) {
+      if (wall === 'left' && seg.hasLeftGap) {
+        if (z <= seg.leftGapStart && z >= seg.leftGapEnd) return true
+        if (
+          prevZ !== undefined &&
+          prevZ > seg.leftGapStart &&
+          z < seg.leftGapEnd
+        )
+          return true
+      }
+      if (wall === 'right' && seg.hasRightGap) {
+        if (z <= seg.rightGapStart && z >= seg.rightGapEnd) return true
+        if (
+          prevZ !== undefined &&
+          prevZ > seg.rightGapStart &&
+          z < seg.rightGapEnd
+        )
+          return true
+      }
+    }
+    return false
+  }
+
+  private aabb(
+    ax: number,
+    ay: number,
+    az: number,
+    aw: number,
+    ah: number,
+    ad: number,
+    bx: number,
+    by: number,
+    bz: number,
+    bw: number,
+    bh: number,
+    bd: number
+  ) {
+    return (
+      Math.abs(ax - bx) < (aw + bw) / 2 &&
+      Math.abs(ay - by) < (ah + bh) / 2 &&
+      Math.abs(az - bz) < (ad + bd) / 2
+    )
+  }
+
+  private swept(
+    x0: number,
+    y0: number,
+    z0: number,
+    x1: number,
+    y1: number,
+    z1: number,
+    pw: number,
+    ph: number,
+    pd: number,
+    bx: number,
+    by: number,
+    bz: number,
+    bw: number,
+    bh: number,
+    bd: number
+  ) {
+    const move = Math.max(
+      Math.abs(x1 - x0),
+      Math.abs(y1 - y0),
+      Math.abs(z1 - z0)
+    )
+    const steps = Math.max(1, Math.ceil(move / 0.25))
+    for (let i = 0; i <= steps; i++) {
+      const t = i / steps
+      if (
+        this.aabb(
+          x0 + (x1 - x0) * t,
+          y0 + (y1 - y0) * t,
+          z0 + (z1 - z0) * t,
+          pw,
+          ph,
+          pd,
+          bx,
+          by,
+          bz,
+          bw,
+          bh,
+          bd
+        )
+      )
+        return true
+    }
+    return false
+  }
+
+  tick(delta: number) {
+    const dt = Math.min(delta, 0.05)
+
+    if (this.status === 'dying') {
+      this.deathHoldLeft -= dt
+      if (this.deathHoldLeft <= 0) this.finalizeGameOver()
+      else this.emit(false)
+      return true
+    }
+
+    if (this.status !== 'playing') {
+      return (['playing', 'paused', 'dying'] as GameStatus[]).includes(
+        this.status
+      )
+    }
+
+    if (this.nearMissCooldown > 0)
+      this.nearMissCooldown = Math.max(0, this.nearMissCooldown - dt)
+    if (this.flipCooldown > 0)
+      this.flipCooldown = Math.max(0, this.flipCooldown - dt)
+
+    const prevX = this.playerX
+    const prevY = this.playerY
+    const prevZ = this.playerZ
+
+    // Flip arc across corridor
+    if (this.flipT > 0) {
+      this.flipT += dt / FLIP_DURATION
+      const t = Math.min(1, this.flipT)
+      // Smoothstep
+      const s = t * t * (3 - 2 * t)
+      this.playerX = this.flipFromX + (this.flipToX - this.flipFromX) * s
+      // Slight hop during flip
+      const hop = Math.sin(t * Math.PI) * 0.35
+      const targetY = HEIGHT_POSITIONS[this.heightLane] ?? 0
+      this.playerY = targetY + hop
+      this.playerZ -= this.speed * dt
+
+      if (t >= 1) {
+        this.flipT = 0
+        this.playerX = this.flipToX
+        this.playerY = targetY
+        this.grounded = true
+        this.velY = 0
+      }
+    } else {
+      // Height lane lerp
+      const targetY = HEIGHT_POSITIONS[this.heightLane] ?? 0
+      const dy = targetY - this.playerY
+      // Only snap height when grounded-ish; during jump add vel
+      if (this.jumpQueued && this.grounded) {
+        this.velY = JUMP_VELOCITY
+        this.grounded = false
+        this.jumpQueued = false
+        this.emitEvent({ type: 'jump' })
+      }
+
+      this.velY -= GRAVITY * dt
+      let nextY = this.playerY + this.velY * dt
+
+      // Ground = height lane plane when not over gap
+      const gap = this.overGap(this.wall, this.playerZ, prevZ)
+      if (!gap && nextY <= targetY && this.velY <= 0) {
+        nextY = targetY
+        this.velY = 0
+        this.grounded = true
+      } else {
+        this.grounded = false
+      }
+
+      // Soft pull toward lane when grounded
+      if (this.grounded) {
+        if (Math.abs(dy) > 0.001) {
+          this.playerY +=
+            Math.sign(dy) * Math.min(Math.abs(dy), HEIGHT_SWITCH_SPEED * dt)
+        } else {
+          this.playerY = targetY
+        }
+      } else {
+        this.playerY = nextY
+      }
+
+      this.playerX = this.wall === 'left' ? -WALL_X : WALL_X
+      this.playerZ -= this.speed * dt
+
+      // Fall into gap void (drop below lane range)
+      if (gap && this.playerY < (HEIGHT_POSITIONS[0] ?? -1) - 1.2) {
+        this.beginDeath('gap')
+      }
+      if (this.playerY < -4) this.beginDeath('gap')
+    }
+
+    const px = this.playerX
+    const py = this.playerY
+    const pz = this.playerZ
+    const ph = PLAYER_SIZE * 0.9
+    const flipping = this.flipT > 0
+
+    if (this.status === 'playing') {
+      outer: for (const seg of this.segments) {
+        for (const c of seg.coins) {
+          if (this.collectedCoins[c.id]) continue
+          // Only collect coins on same wall unless mid-flip near center
+          const cx = c.wall === 'left' ? -WALL_X : WALL_X
+          const cy = HEIGHT_POSITIONS[c.height] ?? 0
+          const wallOk =
+            flipping ||
+            c.wall === this.wall ||
+            Math.abs(px - cx) < WALL_X * 0.55
+          if (!wallOk) continue
+          if (
+            this.swept(
+              prevX,
+              prevY,
+              prevZ,
+              px,
+              py,
+              pz,
+              ph,
+              ph,
+              ph,
+              cx,
+              cy,
+              c.z,
+              0.55,
+              0.55,
+              0.55
+            )
+          ) {
+            this.collectCoin(c.id)
+          }
+        }
+
+        for (const o of seg.obstacles) {
+          // Only collide with obstacles on the wall we're attached to
+          // (mid-flip: collide if close to that wall's X)
+          const ox = o.wall === 'left' ? -WALL_X : WALL_X
+          const oy = HEIGHT_POSITIONS[o.height] ?? 0
+          const ext = obstacleHalfExtents(o.type)
+          const onWall =
+            flipping
+              ? Math.abs(px - ox) < WALL_X * 0.55
+              : o.wall === this.wall
+          if (!onWall) continue
+
+          // Barriers only hit near ground of that height (jump clears)
+          // Walls hit at height regardless of jump if same height lane nearby
+          if (
+            this.swept(
+              prevX,
+              prevY,
+              prevZ,
+              px,
+              py,
+              pz,
+              ph,
+              ph,
+              ph,
+              ox,
+              oy,
+              o.z,
+              0.7,
+              ext.h * 2,
+              ext.d * 2
+            )
+          ) {
+            // Jump clear for barriers: player above obstacle center enough
+            if (
+              o.type === OBSTACLE_TYPES.BARRIER &&
+              py > oy + ext.h * 0.55
+            ) {
+              continue
+            }
+            const cause: DeathCause =
+              o.type === OBSTACLE_TYPES.BARRIER ? 'barrier' : 'wall'
+            this.beginDeath(cause)
+            break outer
+          }
+        }
+      }
+
+      // Near-miss
+      if (this.status === 'playing' && this.nearMissCooldown <= 0 && !flipping) {
+        for (const seg of this.segments) {
+          for (const o of seg.obstacles) {
+            if (o.wall !== this.wall) continue
+            if (this.nearMissSeen.has(o.id)) continue
+            if (!(prevZ > o.z && pz <= o.z + NEAR_MISS_Z)) continue
+            const oy = HEIGHT_POSITIONS[o.height] ?? 0
+            if (Math.abs(py - oy) < 0.95) {
+              this.nearMissSeen.add(o.id)
+              this.nearMissCooldown = NEAR_MISS_COOLDOWN
+              this.emitEvent({ type: 'nearMiss' })
+              break
+            }
+          }
+        }
+      }
+    }
+
+    if (this.status === 'playing') {
+      this.tickWorld()
+      this.emit(false)
+    }
+
+    return (['playing', 'paused', 'dying'] as GameStatus[]).includes(
+      this.status
+    )
   }
 }

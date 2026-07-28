@@ -1,16 +1,10 @@
 import { DEFAULT_MASTER_VOLUME } from '../audio/sounds'
 
-const KEY = 'color_gate_rush_audio_settings'
+const KEY = 'wall_run_switch_audio_settings'
 
-export type AudioSettings = {
-  muted: boolean
-  volume: number
-}
+export type AudioSettings = { muted: boolean; volume: number }
 
-const DEFAULTS: AudioSettings = {
-  muted: false,
-  volume: DEFAULT_MASTER_VOLUME,
-}
+const DEFAULTS: AudioSettings = { muted: false, volume: DEFAULT_MASTER_VOLUME }
 
 function clampVolume(n: number): number {
   if (!Number.isFinite(n)) return DEFAULT_MASTER_VOLUME

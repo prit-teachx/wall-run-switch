@@ -14,7 +14,7 @@ export class ErrorBoundary extends Component<Props, State> {
   }
 
   componentDidCatch(error: Error, info: ErrorInfo) {
-    console.error('Color Gate Rush crashed:', error, info.componentStack)
+    console.error('Wall Run Switch crashed:', error, info.componentStack)
   }
 
   render() {
@@ -22,13 +22,13 @@ export class ErrorBoundary extends Component<Props, State> {
       return (
         <div className={styles.root}>
           <h1 className={styles.title}>Something went wrong</h1>
-          <p className={styles.msg}>{this.state.error.message}</p>
+          <p className={styles.body}>{this.state.error.message}</p>
           <button
             type="button"
+            onClick={() => this.setState({ error: null })}
             className={styles.btn}
-            onClick={() => window.location.reload()}
           >
-            Reload
+            TRY AGAIN
           </button>
         </div>
       )
