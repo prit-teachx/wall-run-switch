@@ -1,38 +1,42 @@
 import {
   BASE_SPEED,
+  CEILING_Y,
   COIN_POINTS,
   DEATH_HOLD_DURATION,
   DISTANCE_SCORE_RATE,
-  FLIP_BONUS_POINTS,
-  FLIP_COOLDOWN,
-  FLIP_DURATION,
+  FLOOR_Y,
   GAME_OVER_TIPS,
   GRAVITY,
-  HEIGHT_LANES,
-  HEIGHT_POSITIONS,
-  HEIGHT_SWITCH_SPEED,
   JUMP_VELOCITY,
+  LANE_COUNT,
+  LANE_POSITIONS,
+  LANE_SWITCH_SPEED,
   MAX_SPEED,
   NEAR_MISS_COOLDOWN,
   NEAR_MISS_Z,
   OBSTACLE_TYPES,
+  PLAYER_HALF,
   PLAYER_SIZE,
   SEGMENT_LENGTH,
   SEGMENTS_AHEAD,
   SEGMENTS_BEHIND,
-  SPAWN_PROTECT,
+  SPAWN_PROTECT_MS,
   SPEED_RAMP,
-  START_HEIGHT,
-  WALL_X,
+  START_LANE,
+  SWITCH_BONUS,
+  SWITCH_COOLDOWN,
+  TETHER_DAMPING,
+  TETHER_LENGTH,
+  TETHER_STIFFNESS,
   type DeathCause,
   type GameStatus,
-  type WallSide,
+  type Surface,
 } from './constants'
 import {
   buildInitialSegments,
   createRunSeed,
   generateSegment,
-  obstacleHalfExtents,
+  obstacleBounds,
   type SegmentData,
 } from './segments'
 
@@ -49,10 +53,9 @@ export interface GameSnapshot {
   deathCause: DeathCause | null
   scoreDeltaToBest: number
   tipIndex: number
-  wall: WallSide
-  heightLane: number
-  flips: number
-  flipT: number
+  active: Surface
+  switches: number
+  lane: number
 }
 
 export type SnapshotListener = (snap: GameSnapshot) => void
@@ -61,17 +64,16 @@ export type GameEvent =
   | { type: 'coin' }
   | { type: 'nearMiss' }
   | { type: 'crash'; cause: DeathCause }
-  | { type: 'flip' }
-  | { type: 'jump' }
+  | { type: 'jump'; surface: Surface }
+  | { type: 'switch'; surface: Surface }
   | { type: 'runStart' }
   | { type: 'runStop' }
 
 export type GameEventListener = (event: GameEvent) => void
 
 /**
- * Pure Wall Run Switch simulation.
- * Player sticks to left/right wall; flip crosses the corridor.
- * Height lanes 0..2 on the wall; jump clears barriers.
+ * Link Twin ? dual tethered cubes on floor + ceiling.
+ * Both must survive. Jump active twin; tether yanks the partner.
  */
 export class GameEngine {
   status: GameStatus = 'start'
@@ -85,26 +87,28 @@ export class GameEngine {
   segments: SegmentData[] = buildInitialSegments(SEGMENTS_AHEAD, this.runSeed)
   speed = BASE_SPEED
 
-  playerZ: number = 0
-  /** World X; ?WALL_X when grounded on a wall. */
-  playerX: number = -WALL_X
-  /** World Y height on wall. */
-  playerY: number = HEIGHT_POSITIONS[START_HEIGHT]!
-  wall: WallSide = 'left'
-  heightLane = START_HEIGHT
-  velY: number = 0
-  grounded = true
-  flips = 0
-  flipCooldown = 0
-  /** 0 = not flipping; 0..1 during flip. */
-  flipT: number = 0
-  flipFromX: number = 0
-  flipToX: number = 0
+  lane = START_LANE
+  playerZ = 0
+  playerX = 0
+
+  // Floor twin
+  floorY: number = PLAYER_HALF
+  floorVelY: number = 0
+  floorGrounded = true
+
+  // Ceiling twin
+  ceilY: number = CEILING_Y - PLAYER_HALF
+  ceilVelY: number = 0
+  ceilGrounded = true
+
+  active: Surface = 'floor'
+  switches = 0
+  switchCooldown = 0
   jumpQueued = false
   collectedCoins: CollectedMap = {}
   maxSegmentIndex = SEGMENTS_AHEAD
-  solidsLeft = 99
-  solidsRight = 99
+  solidsFloor = 99
+  solidsCeil = 99
   spawnProtectUntil = 0
 
   deathCause: DeathCause | null = null
@@ -155,10 +159,9 @@ export class GameEngine {
       deathCause: this.deathCause,
       scoreDeltaToBest: Math.floor(this.score) - prevBest,
       tipIndex: this.tipIndex,
-      wall: this.wall,
-      heightLane: this.heightLane,
-      flips: this.flips,
-      flipT: this.flipT,
+      active: this.active,
+      switches: this.switches,
+      lane: this.lane,
     }
   }
 
@@ -180,23 +183,25 @@ export class GameEngine {
     this.runSeed = seed
     this.maxSegmentIndex = SEGMENTS_AHEAD
     this.segments = buildInitialSegments(SEGMENTS_AHEAD, seed)
-    this.solidsLeft = 99
-    this.solidsRight = 99
+    this.solidsFloor = 99
+    this.solidsCeil = 99
     for (const seg of this.segments) {
-      this.solidsLeft = seg.hasLeftGap ? 0 : this.solidsLeft + 1
-      this.solidsRight = seg.hasRightGap ? 0 : this.solidsRight + 1
+      this.solidsFloor = seg.hasGap ? 0 : this.solidsFloor + 1
+      this.solidsCeil = seg.hasCeilingGap ? 0 : this.solidsCeil + 1
     }
     this.collectedCoins = {}
-    this.wall = 'left'
-    this.heightLane = START_HEIGHT
+    this.lane = START_LANE
     this.playerZ = 0
-    this.playerX = -WALL_X
-    this.playerY = HEIGHT_POSITIONS[START_HEIGHT]!
-    this.velY = 0
-    this.grounded = true
-    this.flips = 0
-    this.flipCooldown = 0
-    this.flipT = 0
+    this.playerX = LANE_POSITIONS[START_LANE] ?? 0
+    this.floorY = PLAYER_HALF
+    this.floorVelY = 0
+    this.floorGrounded = true
+    this.ceilY = CEILING_Y - PLAYER_HALF
+    this.ceilVelY = 0
+    this.ceilGrounded = true
+    this.active = 'floor'
+    this.switches = 0
+    this.switchCooldown = 0
     this.jumpQueued = false
     this.score = 0
     this.coins = 0
@@ -207,7 +212,7 @@ export class GameEngine {
     this.deathHoldLeft = 0
     this.highScoreAtRunStart = this.highScore
     this.tipIndex = this.runId % GAME_OVER_TIPS.length
-    this.spawnProtectUntil = performance.now() + SPAWN_PROTECT * 1000
+    this.spawnProtectUntil = performance.now() + SPAWN_PROTECT_MS
     this.nearMissCooldown = 0
     this.nearMissSeen.clear()
     this.runId += 1
@@ -242,45 +247,48 @@ export class GameEngine {
     else if (this.status === 'paused') this.resumeGame()
   }
 
-  goUp() {
-    if (this.status !== 'playing' || this.flipT > 0) return
-    this.heightLane = Math.min(HEIGHT_LANES - 1, this.heightLane + 1)
+  goLeft() {
+    if (this.status !== 'playing') return
+    this.lane = Math.max(0, this.lane - 1)
   }
 
-  goDown() {
-    if (this.status !== 'playing' || this.flipT > 0) return
-    this.heightLane = Math.max(0, this.heightLane - 1)
+  goRight() {
+    if (this.status !== 'playing') return
+    this.lane = Math.min(LANE_COUNT - 1, this.lane + 1)
+  }
+
+  switchActive() {
+    if (this.status !== 'playing') return
+    if (this.switchCooldown > 0) return
+    this.active = this.active === 'floor' ? 'ceiling' : 'floor'
+    this.switchCooldown = SWITCH_COOLDOWN
+    this.switches += 1
+    this.score += SWITCH_BONUS
+    this.emitEvent({ type: 'switch', surface: this.active })
+    this.emit(false)
   }
 
   requestJump() {
-    if (this.status !== 'playing' || this.flipT > 0) return
-    if (this.grounded) {
-      this.velY = JUMP_VELOCITY
-      this.grounded = false
-      this.jumpQueued = false
-      this.emitEvent({ type: 'jump' })
-      return
+    if (this.status !== 'playing') return
+    if (this.active === 'floor') {
+      if (this.floorGrounded) {
+        this.floorVelY = JUMP_VELOCITY
+        this.floorGrounded = false
+        this.jumpQueued = false
+        this.emitEvent({ type: 'jump', surface: 'floor' })
+        return
+      }
+    } else {
+      if (this.ceilGrounded) {
+        // Jump away from ceiling (down)
+        this.ceilVelY = -JUMP_VELOCITY
+        this.ceilGrounded = false
+        this.jumpQueued = false
+        this.emitEvent({ type: 'jump', surface: 'ceiling' })
+        return
+      }
     }
     this.jumpQueued = true
-  }
-
-  requestFlip() {
-    if (this.status !== 'playing') return
-    if (this.flipCooldown > 0 || this.flipT > 0) return
-
-    const next: WallSide = this.wall === 'left' ? 'right' : 'left'
-    this.flipFromX = this.playerX
-    this.flipToX = next === 'left' ? -WALL_X : WALL_X
-    this.wall = next
-    this.flipT = 0.001
-    this.grounded = false
-    this.jumpQueued = false
-    this.velY = 0
-    this.flipCooldown = FLIP_COOLDOWN
-    this.flips += 1
-    this.score += FLIP_BONUS_POINTS
-    this.emitEvent({ type: 'flip' })
-    this.emit(false)
   }
 
   private recomputeScore() {
@@ -289,7 +297,7 @@ export class GameEngine {
     this.score =
       dist * DISTANCE_SCORE_RATE +
       this.coins * COIN_POINTS +
-      this.flips * FLIP_BONUS_POINTS
+      this.switches * SWITCH_BONUS
   }
 
   private collectCoin(id: string) {
@@ -307,9 +315,9 @@ export class GameEngine {
     this.status = 'dying'
     this.deathCause = cause
     this.deathHoldLeft = DEATH_HOLD_DURATION
-    this.velY = 0
+    this.floorVelY = 0
+    this.ceilVelY = 0
     this.jumpQueued = false
-    this.flipT = 0
     this.recomputeScore()
     this.score = Math.floor(this.score)
     this.emitEvent({ type: 'crash', cause })
@@ -330,7 +338,7 @@ export class GameEngine {
     this.emit(true)
   }
 
-  private intensityForSegment(index: number): number {
+  private intensity(index: number): number {
     if (index < 2) return 0
     const base = Math.min(1, (index - 2) / 48)
     const wave = 0.5 + 0.5 * Math.sin((index / 8) * Math.PI * 2)
@@ -350,13 +358,13 @@ export class GameEngine {
     if (needUntil > this.maxSegmentIndex) {
       const i = this.maxSegmentIndex + 1
       const prev = segs.length ? segs[segs.length - 1]! : null
-      const next = generateSegment(i, this.intensityForSegment(i), this.runSeed, {
+      const next = generateSegment(i, this.intensity(i), this.runSeed, {
         prev,
-        solidsLeft: this.solidsLeft,
-        solidsRight: this.solidsRight,
+        solidsFloor: this.solidsFloor,
+        solidsCeil: this.solidsCeil,
       })
-      this.solidsLeft = next.hasLeftGap ? 0 : this.solidsLeft + 1
-      this.solidsRight = next.hasRightGap ? 0 : this.solidsRight + 1
+      this.solidsFloor = next.hasGap ? 0 : this.solidsFloor + 1
+      this.solidsCeil = next.hasCeilingGap ? 0 : this.solidsCeil + 1
       segs = segs.concat(next)
       this.maxSegmentIndex = i
       changed = true
@@ -370,26 +378,26 @@ export class GameEngine {
     if (changed) this.segments = segs
   }
 
-  private overGap(wall: WallSide, z: number, prevZ?: number): boolean {
+  private overFloorGap(z: number, prevZ?: number) {
     for (const seg of this.segments) {
-      if (wall === 'left' && seg.hasLeftGap) {
-        if (z <= seg.leftGapStart && z >= seg.leftGapEnd) return true
-        if (
-          prevZ !== undefined &&
-          prevZ > seg.leftGapStart &&
-          z < seg.leftGapEnd
-        )
-          return true
-      }
-      if (wall === 'right' && seg.hasRightGap) {
-        if (z <= seg.rightGapStart && z >= seg.rightGapEnd) return true
-        if (
-          prevZ !== undefined &&
-          prevZ > seg.rightGapStart &&
-          z < seg.rightGapEnd
-        )
-          return true
-      }
+      if (!seg.hasGap) continue
+      if (z <= seg.gapStart && z >= seg.gapEnd) return true
+      if (prevZ !== undefined && prevZ > seg.gapStart && z < seg.gapEnd)
+        return true
+    }
+    return false
+  }
+
+  private overCeilGap(z: number, prevZ?: number) {
+    for (const seg of this.segments) {
+      if (!seg.hasCeilingGap) continue
+      if (z <= seg.ceilingGapStart && z >= seg.ceilingGapEnd) return true
+      if (
+        prevZ !== undefined &&
+        prevZ > seg.ceilingGapStart &&
+        z < seg.ceilingGapEnd
+      )
+        return true
     }
     return false
   }
@@ -437,7 +445,7 @@ export class GameEngine {
       Math.abs(y1 - y0),
       Math.abs(z1 - z0)
     )
-    const steps = Math.max(1, Math.ceil(move / 0.25))
+    const steps = Math.max(1, Math.ceil(move / 0.28))
     for (let i = 0; i <= steps; i++) {
       const t = i / steps
       if (
@@ -461,6 +469,34 @@ export class GameEngine {
     return false
   }
 
+  /** Enforce soft tether spring between twins. */
+  private applyTether(dt: number) {
+    const dy = this.ceilY - this.floorY
+    const dist = Math.abs(dy)
+    if (dist <= TETHER_LENGTH) return
+
+    const stretch = dist - TETHER_LENGTH
+    const dir = dy > 0 ? 1 : -1
+    // Force pulls floor up and ceiling down when overstretched
+    const force = stretch * TETHER_STIFFNESS
+    const relVel = this.ceilVelY - this.floorVelY
+    const damp = relVel * TETHER_DAMPING
+
+    const impulse = (force + damp) * dt
+    this.floorVelY += impulse * dir * 0.5
+    this.ceilVelY -= impulse * dir * 0.5
+
+    // Hard clamp extreme stretch (safety)
+    if (stretch > 1.8) {
+      const mid = (this.floorY + this.ceilY) / 2
+      const half = TETHER_LENGTH / 2
+      this.floorY = mid - half
+      this.ceilY = mid + half
+      this.floorVelY *= 0.5
+      this.ceilVelY *= 0.5
+    }
+  }
+
   tick(delta: number) {
     const dt = Math.min(delta, 0.05)
 
@@ -479,115 +515,122 @@ export class GameEngine {
 
     if (this.nearMissCooldown > 0)
       this.nearMissCooldown = Math.max(0, this.nearMissCooldown - dt)
-    if (this.flipCooldown > 0)
-      this.flipCooldown = Math.max(0, this.flipCooldown - dt)
+    if (this.switchCooldown > 0)
+      this.switchCooldown = Math.max(0, this.switchCooldown - dt)
 
     const prevX = this.playerX
-    const prevY = this.playerY
+    const prevFloorY = this.floorY
+    const prevCeilY = this.ceilY
     const prevZ = this.playerZ
 
-    // Flip arc across corridor
-    if (this.flipT > 0) {
-      this.flipT += dt / FLIP_DURATION
-      const t = Math.min(1, this.flipT)
-      // Smoothstep
-      const s = t * t * (3 - 2 * t)
-      this.playerX = this.flipFromX + (this.flipToX - this.flipFromX) * s
-      // Slight hop during flip
-      const hop = Math.sin(t * Math.PI) * 0.35
-      const targetY = HEIGHT_POSITIONS[this.heightLane] ?? 0
-      this.playerY = targetY + hop
-      this.playerZ -= this.speed * dt
-
-      if (t >= 1) {
-        this.flipT = 0
-        this.playerX = this.flipToX
-        this.playerY = targetY
-        this.grounded = true
-        this.velY = 0
-      }
+    // Shared lane X
+    const targetX = LANE_POSITIONS[this.lane] ?? 0
+    const dx = targetX - this.playerX
+    if (Math.abs(dx) > 0.001) {
+      this.playerX +=
+        Math.sign(dx) * Math.min(Math.abs(dx), LANE_SWITCH_SPEED * dt)
     } else {
-      // Height lane lerp
-      const targetY = HEIGHT_POSITIONS[this.heightLane] ?? 0
-      const dy = targetY - this.playerY
-      // Only snap height when grounded-ish; during jump add vel
-      if (this.jumpQueued && this.grounded) {
-        this.velY = JUMP_VELOCITY
-        this.grounded = false
-        this.jumpQueued = false
-        this.emitEvent({ type: 'jump' })
-      }
-
-      this.velY -= GRAVITY * dt
-      let nextY = this.playerY + this.velY * dt
-
-      // Ground = height lane plane when not over gap
-      const gap = this.overGap(this.wall, this.playerZ, prevZ)
-      if (!gap && nextY <= targetY && this.velY <= 0) {
-        nextY = targetY
-        this.velY = 0
-        this.grounded = true
-      } else {
-        this.grounded = false
-      }
-
-      // Soft pull toward lane when grounded
-      if (this.grounded) {
-        if (Math.abs(dy) > 0.001) {
-          this.playerY +=
-            Math.sign(dy) * Math.min(Math.abs(dy), HEIGHT_SWITCH_SPEED * dt)
-        } else {
-          this.playerY = targetY
-        }
-      } else {
-        this.playerY = nextY
-      }
-
-      this.playerX = this.wall === 'left' ? -WALL_X : WALL_X
-      this.playerZ -= this.speed * dt
-
-      // Fall into gap void (drop below lane range)
-      if (gap && this.playerY < (HEIGHT_POSITIONS[0] ?? -1) - 1.2) {
-        this.beginDeath('gap')
-      }
-      if (this.playerY < -4) this.beginDeath('gap')
+      this.playerX = targetX
     }
 
+    this.playerZ -= this.speed * dt
+
+    // Queued jumps
+    if (this.jumpQueued) {
+      if (this.active === 'floor' && this.floorGrounded) {
+        this.floorVelY = JUMP_VELOCITY
+        this.floorGrounded = false
+        this.jumpQueued = false
+        this.emitEvent({ type: 'jump', surface: 'floor' })
+      } else if (this.active === 'ceiling' && this.ceilGrounded) {
+        this.ceilVelY = -JUMP_VELOCITY
+        this.ceilGrounded = false
+        this.jumpQueued = false
+        this.emitEvent({ type: 'jump', surface: 'ceiling' })
+      }
+    }
+
+    // Gravity: floor pulls down (-), ceiling pulls up (+) when "grounded gravity"
+    // Free fall for both: floorVel accelerates down, ceilVel accelerates up toward ceiling
+    this.floorVelY -= GRAVITY * dt
+    this.ceilVelY += GRAVITY * dt // toward +Y (ceiling)
+
+    this.floorY += this.floorVelY * dt
+    this.ceilY += this.ceilVelY * dt
+
+    this.applyTether(dt)
+
+    const floorContact = FLOOR_Y + PLAYER_HALF
+    const ceilContact = CEILING_Y - PLAYER_HALF
+    const floorGap = this.overFloorGap(this.playerZ, prevZ)
+    const ceilGap = this.overCeilGap(this.playerZ, prevZ)
+
+    this.floorGrounded = false
+    this.ceilGrounded = false
+
+    if (
+      !floorGap &&
+      this.floorY <= floorContact &&
+      this.floorVelY <= 0 &&
+      prevFloorY >= floorContact - 0.35
+    ) {
+      this.floorY = floorContact
+      this.floorVelY = 0
+      this.floorGrounded = true
+    }
+
+    if (
+      !ceilGap &&
+      this.ceilY >= ceilContact &&
+      this.ceilVelY >= 0 &&
+      prevCeilY <= ceilContact + 0.35
+    ) {
+      this.ceilY = ceilContact
+      this.ceilVelY = 0
+      this.ceilGrounded = true
+    }
+
+    // Prevent twins from passing through each other
+    if (this.ceilY - this.floorY < PLAYER_SIZE * 0.95) {
+      const mid = (this.floorY + this.ceilY) / 2
+      this.floorY = mid - PLAYER_SIZE * 0.48
+      this.ceilY = mid + PLAYER_SIZE * 0.48
+      if (this.floorVelY > 0) this.floorVelY *= 0.3
+      if (this.ceilVelY < 0) this.ceilVelY *= 0.3
+    }
+
+    // Void deaths
+    if (this.floorY < FLOOR_Y - 2.4) this.beginDeath('gap')
+    if (this.ceilY > CEILING_Y + 2.4) this.beginDeath('gap')
+
     const px = this.playerX
-    const py = this.playerY
     const pz = this.playerZ
-    const ph = PLAYER_SIZE * 0.9
-    const flipping = this.flipT > 0
+    const ph = PLAYER_SIZE * 0.92
 
     if (this.status === 'playing') {
       outer: for (const seg of this.segments) {
         for (const c of seg.coins) {
           if (this.collectedCoins[c.id]) continue
-          // Only collect coins on same wall unless mid-flip near center
-          const cx = c.wall === 'left' ? -WALL_X : WALL_X
-          const cy = HEIGHT_POSITIONS[c.height] ?? 0
-          const wallOk =
-            flipping ||
-            c.wall === this.wall ||
-            Math.abs(px - cx) < WALL_X * 0.55
-          if (!wallOk) continue
+          const cx = LANE_POSITIONS[c.lane] ?? 0
+          const twinY = c.surface === 'floor' ? this.floorY : this.ceilY
+          const prevTwinY = c.surface === 'floor' ? prevFloorY : prevCeilY
           if (
             this.swept(
               prevX,
-              prevY,
+              prevTwinY,
               prevZ,
               px,
-              py,
+              twinY,
               pz,
               ph,
               ph,
               ph,
               cx,
-              cy,
+              c.y,
               c.z,
-              0.55,
-              0.55,
-              0.55
+              0.65,
+              0.65,
+              0.65
             )
           ) {
             this.collectCoin(c.id)
@@ -595,44 +638,33 @@ export class GameEngine {
         }
 
         for (const o of seg.obstacles) {
-          // Only collide with obstacles on the wall we're attached to
-          // (mid-flip: collide if close to that wall's X)
-          const ox = o.wall === 'left' ? -WALL_X : WALL_X
-          const oy = HEIGHT_POSITIONS[o.height] ?? 0
-          const ext = obstacleHalfExtents(o.type)
-          const onWall =
-            flipping
-              ? Math.abs(px - ox) < WALL_X * 0.55
-              : o.wall === this.wall
-          if (!onWall) continue
-
-          // Barriers only hit near ground of that height (jump clears)
-          // Walls hit at height regardless of jump if same height lane nearby
+          const b = obstacleBounds(o.type, o.surface)
+          const ox = LANE_POSITIONS[o.lane] ?? 0
+          const twinY = o.surface === 'floor' ? this.floorY : this.ceilY
+          const prevTwinY = o.surface === 'floor' ? prevFloorY : prevCeilY
           if (
             this.swept(
               prevX,
-              prevY,
+              prevTwinY,
               prevZ,
               px,
-              py,
+              twinY,
               pz,
               ph,
               ph,
               ph,
               ox,
-              oy,
+              b.y,
               o.z,
-              0.7,
-              ext.h * 2,
-              ext.d * 2
+              b.w,
+              b.h,
+              b.d
             )
           ) {
-            // Jump clear for barriers: player above obstacle center enough
-            if (
-              o.type === OBSTACLE_TYPES.BARRIER &&
-              py > oy + ext.h * 0.55
-            ) {
-              continue
+            // Barrier clear if twin jumped high enough past it
+            if (o.type === OBSTACLE_TYPES.BARRIER) {
+              if (o.surface === 'floor' && twinY > b.y + b.h * 0.45) continue
+              if (o.surface === 'ceiling' && twinY < b.y - b.h * 0.45) continue
             }
             const cause: DeathCause =
               o.type === OBSTACLE_TYPES.BARRIER ? 'barrier' : 'wall'
@@ -642,15 +674,14 @@ export class GameEngine {
         }
       }
 
-      // Near-miss
-      if (this.status === 'playing' && this.nearMissCooldown <= 0 && !flipping) {
+      if (this.status === 'playing' && this.nearMissCooldown <= 0) {
         for (const seg of this.segments) {
           for (const o of seg.obstacles) {
-            if (o.wall !== this.wall) continue
             if (this.nearMissSeen.has(o.id)) continue
             if (!(prevZ > o.z && pz <= o.z + NEAR_MISS_Z)) continue
-            const oy = HEIGHT_POSITIONS[o.height] ?? 0
-            if (Math.abs(py - oy) < 0.95) {
+            const twinY = o.surface === 'floor' ? this.floorY : this.ceilY
+            const oy = obstacleBounds(o.type, o.surface).y
+            if (Math.abs(twinY - oy) < 1.1) {
               this.nearMissSeen.add(o.id)
               this.nearMissCooldown = NEAR_MISS_COOLDOWN
               this.emitEvent({ type: 'nearMiss' })

@@ -1,4 +1,4 @@
-const KEY = 'wall_run_switch_high_score'
+const KEY = 'link_twin_high_score'
 
 export async function loadHighScore(): Promise<number> {
   try {

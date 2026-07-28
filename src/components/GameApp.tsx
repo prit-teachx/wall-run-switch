@@ -67,27 +67,27 @@ export function GameApp() {
 
     const unsubEvents = engine.onEvent((event) => {
       switch (event.type) {
-        case 'flip':
-          sounds.play('flip')
+        case 'jump':
+          sounds.play('jump')
           try {
-            navigator.vibrate?.(12)
+            navigator.vibrate?.(10)
           } catch {
             /* ignore */
           }
           break
-        case 'jump':
-          sounds.play('jump')
+        case 'switch':
+          sounds.play('switch')
+          try {
+            navigator.vibrate?.(8)
+          } catch {
+            /* ignore */
+          }
           break
         case 'coin':
           sounds.play('coin')
           break
         case 'nearMiss':
           sounds.play('nearMiss')
-          try {
-            navigator.vibrate?.(10)
-          } catch {
-            /* ignore */
-          }
           break
         case 'crash':
           sounds.play('crash')

@@ -1,40 +1,41 @@
 import {
   BASE_SPEED,
   GRAVITY,
-  HEIGHT_LANES,
   JUMP_VELOCITY,
+  LANE_COUNT,
   OBSTACLE_TYPES,
   SEGMENT_LENGTH,
+  TUNNEL_HEIGHT,
   type ObstacleType,
-  type WallSide,
+  type Surface,
 } from './constants'
 
 export interface ObstacleData {
   id: string
   type: ObstacleType
-  wall: WallSide
-  /** Height lane 0..2 */
-  height: number
+  lane: number
   z: number
+  surface: Surface
 }
 
 export interface CoinData {
   id: string
-  wall: WallSide
-  height: number
+  lane: number
   z: number
+  y: number
+  surface: Surface
 }
 
 export interface SegmentData {
   id: string
   index: number
   zBase: number
-  hasLeftGap: boolean
-  hasRightGap: boolean
-  leftGapStart: number
-  leftGapEnd: number
-  rightGapStart: number
-  rightGapEnd: number
+  hasGap: boolean
+  gapStart: number
+  gapEnd: number
+  hasCeilingGap: boolean
+  ceilingGapStart: number
+  ceilingGapEnd: number
   obstacles: ObstacleData[]
   coins: CoinData[]
 }
@@ -66,23 +67,22 @@ function shuffleInPlace<T>(arr: T[], rand: () => number): T[] {
   return arr
 }
 
-function jumpAirTime(): number {
+function jumpAirTime() {
   return (2 * JUMP_VELOCITY) / GRAVITY
 }
 
-function maxSafeGapLength(): number {
-  const jumpDist = BASE_SPEED * jumpAirTime()
-  return Math.min(SEGMENT_LENGTH * 0.36, jumpDist * 0.42)
+function maxSafeGapLength() {
+  return Math.min(SEGMENT_LENGTH * 0.36, BASE_SPEED * jumpAirTime() * 0.45)
 }
 
-const MIN_GAP_PAD = 5.2
-const MIN_SOLID_BETWEEN = 2
+const MIN_GAP_PAD = 5.4
+const MIN_SOLID = 2
 const POST_GAP_CLEAR = 0.4
 
 export type SegCtx = {
   prev?: SegmentData | null
-  solidsLeft?: number
-  solidsRight?: number
+  solidsFloor?: number
+  solidsCeil?: number
 }
 
 function placeGap(zBase: number, rand: () => number) {
@@ -112,89 +112,87 @@ export function generateSegment(
   const zBase = -index * SEGMENT_LENGTH
   const isStart = index < 2
   const prev = ctx.prev ?? null
-  const solidsLeft = ctx.solidsLeft ?? (prev ? (prev.hasLeftGap ? 0 : 99) : 99)
-  const solidsRight =
-    ctx.solidsRight ?? (prev ? (prev.hasRightGap ? 0 : 99) : 99)
+  const solidsFloor =
+    ctx.solidsFloor ?? (prev ? (prev.hasGap ? 0 : 99) : 99)
+  const solidsCeil =
+    ctx.solidsCeil ?? (prev ? (prev.hasCeilingGap ? 0 : 99) : 99)
 
-  const gapChance = 0.05 + difficulty * 0.1
-  const hasLeftGap =
+  const gapChance = 0.05 + difficulty * 0.09
+  const hasGap =
     !isStart &&
-    solidsLeft >= MIN_SOLID_BETWEEN &&
-    !prev?.hasLeftGap &&
+    solidsFloor >= MIN_SOLID &&
+    !prev?.hasGap &&
     rand() < gapChance
-  // Never both walls gapped same segment early; rare later
-  const hasRightGap =
+  const hasCeilingGap =
     !isStart &&
-    solidsRight >= MIN_SOLID_BETWEEN &&
-    !prev?.hasRightGap &&
-    !hasLeftGap &&
-    difficulty > 0.12 &&
-    rand() < gapChance * 0.95
+    solidsCeil >= MIN_SOLID &&
+    !prev?.hasCeilingGap &&
+    !hasGap &&
+    difficulty > 0.14 &&
+    rand() < gapChance * 0.9
 
-  let leftGapStart = zBase
-  let leftGapEnd = zBase
-  let rightGapStart = zBase
-  let rightGapEnd = zBase
-  if (hasLeftGap) {
+  let gapStart = zBase
+  let gapEnd = zBase
+  let ceilingGapStart = zBase
+  let ceilingGapEnd = zBase
+  if (hasGap) {
     const g = placeGap(zBase, rand)
-    leftGapStart = g.gapStart
-    leftGapEnd = g.gapEnd
+    gapStart = g.gapStart
+    gapEnd = g.gapEnd
   }
-  if (hasRightGap) {
+  if (hasCeilingGap) {
     const g = placeGap(zBase, rand)
-    rightGapStart = g.gapStart
-    rightGapEnd = g.gapEnd
+    ceilingGapStart = g.gapStart
+    ceilingGapEnd = g.gapEnd
   }
 
   const obstacles: ObstacleData[] = []
   const coins: CoinData[] = []
   const open =
     !isStart &&
-    !hasLeftGap &&
-    !hasRightGap &&
-    difficulty < 0.2 &&
+    !hasGap &&
+    !hasCeilingGap &&
+    difficulty < 0.18 &&
     rand() < 0.4
 
   if (!isStart && !open) {
-    const justLeft = !!prev?.hasLeftGap
-    const justRight = !!prev?.hasRightGap
-    const minZ = justLeft || justRight ? POST_GAP_CLEAR : 0.28
-    const slots = shuffleInPlace(
+    const justLand =
+      !!prev?.hasGap || !!prev?.hasCeilingGap
+    const minZ = justLand ? POST_GAP_CLEAR : 0.28
+    const zSlots = shuffleInPlace(
       [0.38, 0.55, 0.72].filter((s) => s >= minZ + 0.02),
       rand
     )
-    if (slots.length === 0) slots.push(0.65)
+    if (zSlots.length === 0) zSlots.push(0.62)
 
-    const walls: WallSide[] =
-      difficulty < 0.22
+    const surfaces: Surface[] =
+      difficulty < 0.2
         ? rand() < 0.5
-          ? ['left']
-          : ['right']
-        : rand() < 0.38
-          ? ['left']
-          : rand() < 0.72
-            ? ['right']
-            : ['left', 'right']
+          ? ['floor']
+          : ['ceiling']
+        : rand() < 0.36
+          ? ['floor']
+          : rand() < 0.7
+            ? ['ceiling']
+            : ['floor', 'ceiling']
 
-    for (const wall of walls) {
-      // Max 2 of 3 heights blocked
+    for (const surface of surfaces) {
       const count = rand() < 0.2 + difficulty * 0.35 ? 2 : 1
-      const heights = shuffleInPlace([0, 1, 2], rand)
+      const lanes = shuffleInPlace([0, 1, 2], rand)
       for (let i = 0; i < count; i++) {
         const type: ObstacleType =
-          rand() < 0.4 ? OBSTACLE_TYPES.BARRIER : OBSTACLE_TYPES.WALL
-        const zT = slots[i % slots.length]! + (rand() - 0.5) * 0.04
+          rand() < 0.42 ? OBSTACLE_TYPES.BARRIER : OBSTACLE_TYPES.WALL
+        const zT = zSlots[i % zSlots.length]! + (rand() - 0.5) * 0.04
         const zOff = -SEGMENT_LENGTH * Math.min(0.88, Math.max(minZ, zT))
         obstacles.push({
-          id: `${runSeed}-${index}-${wall}-${i}`,
+          id: `${runSeed}-${index}-${surface}-${i}`,
           type,
-          wall,
-          height: heights[i]!,
+          lane: lanes[i]!,
+          surface,
           z: zBase + zOff,
         })
       }
-      // Z separation same wall
-      const same = obstacles.filter((o) => o.wall === wall)
+      const same = obstacles.filter((o) => o.surface === surface)
       if (same.length === 2) {
         const [a, b] = same
         if (a && b && Math.abs(a.z - b.z) < 6) {
@@ -204,30 +202,33 @@ export function generateSegment(
       }
     }
 
-    // Stagger dual-wall packs
-    if (walls.length === 2) {
-      const L = obstacles.filter((o) => o.wall === 'left')
-      const R = obstacles.filter((o) => o.wall === 'right')
-      if (L[0] && R[0] && Math.abs(L[0].z - R[0].z) < 4) {
-        R[0].z = Math.min(R[0].z, L[0].z - 5)
+    if (surfaces.length === 2) {
+      const f = obstacles.filter((o) => o.surface === 'floor')
+      const c = obstacles.filter((o) => o.surface === 'ceiling')
+      if (f[0] && c[0] && Math.abs(f[0].z - c[0].z) < 4) {
+        c[0].z = Math.min(c[0].z, f[0].z - 5)
       }
     }
   }
 
   if (!isStart) {
-    const n = rand() < 0.55 ? 1 : rand() < 0.85 ? 2 : 0
+    const n = rand() < 0.52 ? 1 : rand() < 0.82 ? 2 : 0
     for (let i = 0; i < n; i++) {
-      const wall: WallSide = rand() < 0.5 ? 'left' : 'right'
-      const height = Math.floor(rand() * HEIGHT_LANES)
+      const surface: Surface = rand() < 0.48 ? 'ceiling' : 'floor'
+      const lane = Math.floor(rand() * LANE_COUNT)
       let zOff = -SEGMENT_LENGTH * (0.25 + rand() * 0.5)
-      if (wall === 'left' && hasLeftGap) zOff = -MIN_GAP_PAD * 0.5 * (0.5 + rand() * 0.5)
-      if (wall === 'right' && hasRightGap)
-        zOff = -MIN_GAP_PAD * 0.5 * (0.5 + rand() * 0.5)
+      if (surface === 'floor' && hasGap) {
+        zOff = -MIN_GAP_PAD * 0.55 * (0.5 + rand() * 0.5)
+      }
+      if (surface === 'ceiling' && hasCeilingGap) {
+        zOff = -MIN_GAP_PAD * 0.55 * (0.5 + rand() * 0.5)
+      }
       coins.push({
         id: `${runSeed}-${index}-c${i}`,
-        wall,
-        height,
+        lane,
         z: zBase + zOff,
+        y: surface === 'floor' ? 1.05 : TUNNEL_HEIGHT - 1.05,
+        surface,
       })
     }
   }
@@ -236,12 +237,12 @@ export function generateSegment(
     id: `${runSeed}-${index}`,
     index,
     zBase,
-    hasLeftGap,
-    hasRightGap,
-    leftGapStart,
-    leftGapEnd,
-    rightGapStart,
-    rightGapEnd,
+    hasGap,
+    gapStart,
+    gapEnd,
+    hasCeilingGap,
+    ceilingGapStart,
+    ceilingGapEnd,
     obstacles,
     coins,
   }
@@ -258,25 +259,27 @@ function initialIntensity(index: number): number {
 
 export function buildInitialSegments(ahead: number, runSeed = 0): SegmentData[] {
   const list: SegmentData[] = []
-  let solidsLeft = 99
-  let solidsRight = 99
+  let solidsFloor = 99
+  let solidsCeil = 99
   for (let i = 0; i <= ahead; i++) {
     const prev = list.length ? list[list.length - 1]! : null
     const seg = generateSegment(i, initialIntensity(i), runSeed, {
       prev,
-      solidsLeft,
-      solidsRight,
+      solidsFloor,
+      solidsCeil,
     })
     list.push(seg)
-    solidsLeft = seg.hasLeftGap ? 0 : solidsLeft + 1
-    solidsRight = seg.hasRightGap ? 0 : solidsRight + 1
+    solidsFloor = seg.hasGap ? 0 : solidsFloor + 1
+    solidsCeil = seg.hasCeilingGap ? 0 : solidsCeil + 1
   }
   return list
 }
 
-export function obstacleHalfExtents(type: ObstacleType) {
+export function obstacleBounds(type: ObstacleType, surface: Surface) {
   if (type === OBSTACLE_TYPES.BARRIER) {
-    return { h: 0.55, d: 0.55 }
+    if (surface === 'floor') return { w: 1.55, h: 0.62, d: 0.65, y: 0.32 }
+    return { w: 1.55, h: 0.62, d: 0.65, y: TUNNEL_HEIGHT - 0.32 }
   }
-  return { h: 0.95, d: 0.7 }
+  if (surface === 'floor') return { w: 1.45, h: 1.8, d: 0.75, y: 0.92 }
+  return { w: 1.45, h: 1.8, d: 0.75, y: TUNNEL_HEIGHT - 0.92 }
 }

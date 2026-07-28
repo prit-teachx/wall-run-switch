@@ -1,9 +1,8 @@
 import { DEFAULT_MASTER_VOLUME } from '../audio/sounds'
 
-const KEY = 'wall_run_switch_audio_settings'
+const KEY = 'link_twin_audio_settings'
 
 export type AudioSettings = { muted: boolean; volume: number }
-
 const DEFAULTS: AudioSettings = { muted: false, volume: DEFAULT_MASTER_VOLUME }
 
 function clampVolume(n: number): number {

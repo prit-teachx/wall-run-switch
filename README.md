@@ -1,8 +1,8 @@
-# Wall Run Switch
+# Link Twin
 
-Endless **neon wall-run** game. Stick to the **left** or **right** wall, switch height lanes, jump barriers, and **flip across the corridor** to dodge wall-side hazards.
+Endless **dual-runner** with a neon tether. Control two cubes at once ? one on the **floor**, one on the **ceiling** ? linked by a fixed-length beam. Lane-change moves both. Jump the active twin and the tether yanks its partner.
 
-Offline web game ? **no backend**, no accounts. High score stays in `localStorage`.
+Offline web game ? **no backend**, no accounts.
 
 ## Stack
 
@@ -10,7 +10,7 @@ Offline web game ? **no backend**, no accounts. High score stays in `localStorag
 - Pure TypeScript game engine
 - Canvas 2D neon corridor renderer
 - Web Audio procedural SFX
-- Local high score only
+- Local high score in `localStorage`
 
 ## Run
 
@@ -25,22 +25,21 @@ Open [http://localhost:3000](http://localhost:3000).
 
 | Action | Keyboard | Touch |
 |--------|----------|-------|
-| Height up | W / ? | Swipe up |
-| Height down | S / ? | Swipe down |
-| **Flip wall** | Space / F | Tap |
-| Jump | E / Shift | Double-tap or second button (or hold-flip uses Space for flip; jump = swipe toward center optional) |
+| Change lane | ? ? / A D | Swipe left / right |
+| Jump (active twin) | Space / W / ? | Tap or swipe up |
+| **Switch active twin** | S / ? / F | Swipe down |
 | Pause | P / Esc | Pause button |
-
-> Jump: **E** or **Shift**. Flip: **Space** / **F** / tap.
 
 ## Gameplay
 
-- Auto-run down a neon corridor stuck to one wall
-- **Walls** (solid blocks) ? change height lane **or** flip to the other wall
-- **Barriers** (low beams) ? jump while on that wall
-- **Gaps** ? flip before you fall into the void
-- Hazards live on a wall; the opposite wall is often free
-- Score = distance + coins + flip bonuses
+- Two cubes, always linked by a neon tether
+- **Active twin** (floor or ceiling) is the one that jumps
+- Jumping pulls the partner when the tether goes taut ? use it to clear or dodge
+- **Walls** ? change lane (both twins move)
+- **Barriers** ? jump the twin on that surface
+- **Gaps** ? jump or use the tether pull to clear
+- Hit either twin = death
+- Score = distance + coins + switch bonuses
 
 ## Architecture
 

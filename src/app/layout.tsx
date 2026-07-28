@@ -2,19 +2,19 @@ import type { Metadata, Viewport } from 'next'
 import './globals.css'
 
 export const metadata: Metadata = {
-  title: 'Wall Run Switch',
+  title: 'Link Twin',
   description:
-    'Endless neon wall-run ? flip left/right walls, jump barriers, offline no account.',
-  applicationName: 'Wall Run Switch',
+    'Dual tethered neon runners ? floor and ceiling linked. Offline, no account.',
+  applicationName: 'Link Twin',
   appleWebApp: {
     capable: true,
     statusBarStyle: 'black-translucent',
-    title: 'Wall Run Switch',
+    title: 'Link Twin',
   },
 }
 
 export const viewport: Viewport = {
-  themeColor: '#060510',
+  themeColor: '#050512',
   width: 'device-width',
   initialScale: 1,
   maximumScale: 1,

@@ -1,11 +1,12 @@
 import {
   COLORS,
-  HEIGHT_POSITIONS,
+  LANE_POSITIONS,
   OBSTACLE_TYPES,
-  WALL_X,
+  TUNNEL_HEIGHT,
 } from './constants'
 import type { GameEngine } from './engine'
 import type { SegmentData } from './segments'
+import { obstacleBounds } from './segments'
 
 type Particle = {
   x: number
@@ -19,10 +20,9 @@ type Particle = {
 }
 
 /**
- * Canvas 2D neon corridor ? behind the player looking down the run.
- * Left wall cyan, right wall magenta; player sticks to a wall.
+ * Canvas 2D ? looking down the corridor at dual tethered twins.
  */
-export class WallRenderer {
+export class TwinRenderer {
   private w = 1
   private h = 1
   private dpr = 1
@@ -30,7 +30,7 @@ export class WallRenderer {
   private stars: { x: number; y: number; z: number; s: number }[] = []
 
   constructor(private ctx: CanvasRenderingContext2D) {
-    for (let i = 0; i < 70; i++) {
+    for (let i = 0; i < 80; i++) {
       this.stars.push({
         x: Math.random() * 2 - 1,
         y: Math.random() * 2 - 1,
@@ -50,22 +50,16 @@ export class WallRenderer {
     this.particles = []
   }
 
-  /** Project world (x,y,z relative to player) to screen. */
-  private project(
-    wx: number,
-    wy: number,
-    wz: number,
-    cx: number,
-    cy: number
-  ) {
-    // Player at z=0; world z is more negative ahead
+  private project(wx: number, wy: number, wz: number, cx: number, cy: number) {
     const depth = Math.max(0.08, -wz)
-    const f = 220 / (depth + 4)
+    const f = 200 / (depth + 3.8)
+    // Map world Y (0..TUNNEL) to centered vertical
+    const yN = (wy - TUNNEL_HEIGHT * 0.5) / (TUNNEL_HEIGHT * 0.5)
     return {
-      x: cx + wx * f * 48,
-      y: cy - wy * f * 42,
+      x: cx + wx * f * 42,
+      y: cy - yN * f * 38,
       s: f,
-      alpha: Math.max(0.08, Math.min(1, 1.15 - depth / 55)),
+      alpha: Math.max(0.1, Math.min(1, 1.1 - depth / 52)),
     }
   }
 
@@ -74,7 +68,7 @@ export class WallRenderer {
     const w = this.w
     const h = this.h
     const cx = w * 0.5
-    const cy = h * 0.48
+    const cy = h * 0.46
 
     ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0)
     ctx.fillStyle = COLORS.bg
@@ -85,24 +79,25 @@ export class WallRenderer {
       engine.status === 'dying' ||
       engine.status === 'paused'
 
-    // Vignette tint by wall
-    const onLeft = engine.wall === 'left'
+    // Active tint
     ctx.save()
-    ctx.globalAlpha = 0.06
-    ctx.fillStyle = onLeft ? COLORS.leftEdge : COLORS.rightEdge
+    ctx.globalAlpha = 0.05
+    ctx.fillStyle =
+      engine.active === 'floor' ? COLORS.floorEdge : COLORS.ceilingEdge
     ctx.fillRect(0, 0, w, h)
     ctx.restore()
 
     this.drawStars(cx, cy, w, h, engine.speed, dt)
-    this.drawCorridorShell(cx, cy, engine)
+    this.drawTunnelGuide(cx, cy, engine)
 
-    // Segments: floor strip + wall panels + hazards
     const segs = [...engine.segments].sort((a, b) => a.index - b.index)
     for (const seg of segs) {
       this.drawSegment(seg, engine, cx, cy)
     }
 
-    this.drawPlayer(engine, cx, cy)
+    this.drawTether(engine, cx, cy)
+    this.drawTwin(engine, 'floor', cx, cy)
+    this.drawTwin(engine, 'ceiling', cx, cy)
 
     if (engine.status === 'dying') {
       ctx.save()
@@ -116,8 +111,8 @@ export class WallRenderer {
     this.drawParticles()
 
     const grad = ctx.createLinearGradient(0, h * 0.72, 0, h)
-    grad.addColorStop(0, 'rgba(6,5,16,0)')
-    grad.addColorStop(1, 'rgba(6,5,16,0.6)')
+    grad.addColorStop(0, 'rgba(5,5,18,0)')
+    grad.addColorStop(1, 'rgba(5,5,18,0.58)')
     ctx.fillStyle = grad
     ctx.fillRect(0, h * 0.72, w, h * 0.28)
 
@@ -129,7 +124,7 @@ export class WallRenderer {
   burst(x: number, y: number, color: string, count = 12) {
     for (let i = 0; i < count; i++) {
       const a = Math.random() * Math.PI * 2
-      const sp = 50 + Math.random() * 140
+      const sp = 40 + Math.random() * 150
       this.particles.push({
         x,
         y,
@@ -162,35 +157,35 @@ export class WallRenderer {
       const sc = 0.12 + s.z * s.z
       ctx.globalAlpha = 0.2 + s.z * 0.5
       ctx.fillStyle = COLORS.white
-      ctx.fillRect(
-        cx + s.x * w * 0.4 * sc,
-        cy + s.y * h * 0.35 * sc,
-        s.s,
-        s.s
-      )
+      ctx.fillRect(cx + s.x * w * 0.42 * sc, cy + s.y * h * 0.32 * sc, s.s, s.s)
     }
     ctx.globalAlpha = 1
   }
 
-  private drawCorridorShell(cx: number, cy: number, engine: GameEngine) {
+  private drawTunnelGuide(cx: number, cy: number, engine: GameEngine) {
     const ctx = this.ctx
-    // Floor vanishing wedge
+    // Floor + ceiling receding rails
+    for (let i = 0; i < 8; i++) {
+      const z = -i * 7
+      const pf = this.project(0, 0, z, cx, cy)
+      const pc = this.project(0, TUNNEL_HEIGHT, z, cx, cy)
+      ctx.save()
+      ctx.globalAlpha = pf.alpha * 0.25
+      ctx.strokeStyle = COLORS.floorEdge
+      ctx.lineWidth = 1
+      const hw = 3.2 * pf.s * 42
+      ctx.strokeRect(cx - hw, pf.y - 2, hw * 2, 4)
+      ctx.strokeStyle = COLORS.ceilingEdge
+      ctx.strokeRect(cx - hw, pc.y - 2, hw * 2, 4)
+      ctx.restore()
+    }
+    // Horizon pulse
     ctx.save()
-    ctx.beginPath()
-    ctx.moveTo(cx - 20, cy + this.h * 0.35)
-    ctx.lineTo(cx + 20, cy + this.h * 0.35)
-    ctx.lineTo(cx + 8, cy + 10)
-    ctx.lineTo(cx - 8, cy + 10)
-    ctx.closePath()
-    ctx.fillStyle = '#0a0a18'
-    ctx.globalAlpha = 0.9
-    ctx.fill()
-    ctx.restore()
-
-    // Horizon glow
-    ctx.save()
-    const g = ctx.createRadialGradient(cx, cy, 4, cx, cy, this.w * 0.25)
-    g.addColorStop(0, engine.wall === 'left' ? '#00f0ff22' : '#ff00aa22')
+    const g = ctx.createRadialGradient(cx, cy, 2, cx, cy, this.w * 0.22)
+    g.addColorStop(
+      0,
+      engine.active === 'floor' ? '#00f0ff18' : '#c44dff18'
+    )
     g.addColorStop(1, 'transparent')
     ctx.fillStyle = g
     ctx.fillRect(0, 0, this.w, this.h)
@@ -205,45 +200,56 @@ export class WallRenderer {
   ) {
     const ctx = this.ctx
     const pz = engine.playerZ
-    const steps = 6
-    for (let i = 0; i < steps; i++) {
-      const z0 = seg.zBase - (SEGMENT_FRAC(i, steps)) * 22
-      const z1 = seg.zBase - (SEGMENT_FRAC(i + 1, steps)) * 22
-      const rel0 = z0 - pz
-      const rel1 = z1 - pz
-      if (rel0 > 8 || rel1 < -70) continue
 
-      // Left wall panel
-      this.drawWallPanel(cx, cy, -WALL_X, rel0, rel1, true, seg.hasLeftGap, z0, seg)
-      // Right wall panel
-      this.drawWallPanel(cx, cy, WALL_X, rel0, rel1, false, seg.hasRightGap, z0, seg)
-    }
-
-    // Gaps overlays
-    if (seg.hasLeftGap) {
-      this.drawGapMark(cx, cy, -WALL_X, seg.leftGapStart - pz, seg.leftGapEnd - pz, true)
-    }
-    if (seg.hasRightGap) {
-      this.drawGapMark(cx, cy, WALL_X, seg.rightGapStart - pz, seg.rightGapEnd - pz, false)
+    // Floor / ceiling slabs (simplified)
+    const midZ = seg.zBase - 12 - pz
+    if (midZ < 8 && midZ > -70) {
+      if (!seg.hasGap) {
+        const p = this.project(0, 0, midZ, cx, cy)
+        ctx.save()
+        ctx.globalAlpha = p.alpha * 0.35
+        ctx.fillStyle = COLORS.floor
+        const hw = 3.3 * p.s * 42
+        ctx.fillRect(cx - hw, p.y - 3 * p.s, hw * 2, 6 * p.s)
+        ctx.restore()
+      } else {
+        this.drawGapBand(cx, cy, seg.gapStart - pz, seg.gapEnd - pz, 0, COLORS.floorEdge)
+      }
+      if (!seg.hasCeilingGap) {
+        const p = this.project(0, TUNNEL_HEIGHT, midZ, cx, cy)
+        ctx.save()
+        ctx.globalAlpha = p.alpha * 0.35
+        ctx.fillStyle = COLORS.ceiling
+        const hw = 3.3 * p.s * 42
+        ctx.fillRect(cx - hw, p.y - 3 * p.s, hw * 2, 6 * p.s)
+        ctx.restore()
+      } else {
+        this.drawGapBand(
+          cx,
+          cy,
+          seg.ceilingGapStart - pz,
+          seg.ceilingGapEnd - pz,
+          TUNNEL_HEIGHT,
+          COLORS.ceilingEdge
+        )
+      }
     }
 
     for (const o of seg.obstacles) {
       const relZ = o.z - pz
       if (relZ > 6 || relZ < -65) continue
-      const ox = o.wall === 'left' ? -WALL_X : WALL_X
-      const oy = HEIGHT_POSITIONS[o.height] ?? 0
-      const p = this.project(ox, oy, relZ, cx, cy)
+      const b = obstacleBounds(o.type, o.surface)
+      const ox = LANE_POSITIONS[o.lane] ?? 0
+      const p = this.project(ox, b.y, relZ, cx, cy)
       const isBar = o.type === OBSTACLE_TYPES.BARRIER
-      const bw = 10 * p.s * (isBar ? 0.7 : 1)
-      const bh = 14 * p.s * (isBar ? 0.55 : 1.15)
+      const bw = (isBar ? 14 : 16) * p.s
+      const bh = (isBar ? 10 : 22) * p.s
       ctx.save()
       ctx.globalAlpha = p.alpha
       ctx.fillStyle = isBar ? COLORS.barrier : COLORS.wall
-      ctx.shadowColor = isBar ? COLORS.barrier : COLORS.wall
-      ctx.shadowBlur = 8 * p.s
-      // Stick out from wall toward center
-      const inset = o.wall === 'left' ? bw * 0.6 : -bw * 0.6
-      ctx.fillRect(p.x + inset - bw / 2, p.y - bh / 2, bw, bh)
+      ctx.shadowColor = ctx.fillStyle as string
+      ctx.shadowBlur = 10 * p.s
+      ctx.fillRect(p.x - bw / 2, p.y - bh / 2, bw, bh)
       ctx.restore()
     }
 
@@ -251,9 +257,8 @@ export class WallRenderer {
       if (engine.collectedCoins[c.id]) continue
       const relZ = c.z - pz
       if (relZ > 6 || relZ < -65) continue
-      const ox = c.wall === 'left' ? -WALL_X : WALL_X
-      const oy = HEIGHT_POSITIONS[c.height] ?? 0
-      const p = this.project(ox * 0.92, oy, relZ, cx, cy)
+      const ox = LANE_POSITIONS[c.lane] ?? 0
+      const p = this.project(ox, c.y, relZ, cx, cy)
       ctx.save()
       ctx.globalAlpha = p.alpha
       ctx.fillStyle = COLORS.coin
@@ -266,168 +271,115 @@ export class WallRenderer {
     }
   }
 
-  private drawWallPanel(
+  private drawGapBand(
     cx: number,
     cy: number,
-    wallX: number,
-    rel0: number,
-    rel1: number,
-    left: boolean,
-    _hasGap: boolean,
-    zWorld: number,
-    seg: SegmentData
-  ) {
-    // Skip panel slice if fully in gap region
-    if (left && seg.hasLeftGap) {
-      if (zWorld <= seg.leftGapStart && zWorld >= seg.leftGapEnd) return
-    }
-    if (!left && seg.hasRightGap) {
-      if (zWorld <= seg.rightGapStart && zWorld >= seg.rightGapEnd) return
-    }
-
-    const ctx = this.ctx
-    const top = 1.8
-    const bot = -1.8
-    const a = this.project(wallX, top, rel0, cx, cy)
-    const b = this.project(wallX, bot, rel0, cx, cy)
-    const c = this.project(wallX, bot, rel1, cx, cy)
-    const d = this.project(wallX, top, rel1, cx, cy)
-    if (a.s < 0.05) return
-
-    ctx.save()
-    ctx.beginPath()
-    ctx.moveTo(a.x, a.y)
-    ctx.lineTo(b.x, b.y)
-    ctx.lineTo(c.x, c.y)
-    ctx.lineTo(d.x, d.y)
-    ctx.closePath()
-    ctx.globalAlpha = Math.min(a.alpha, c.alpha) * 0.55
-    ctx.fillStyle = left ? COLORS.leftWall : COLORS.rightWall
-    ctx.fill()
-    ctx.strokeStyle = left ? COLORS.leftEdge : COLORS.rightEdge
-    ctx.globalAlpha = Math.min(a.alpha, c.alpha) * 0.45
-    ctx.lineWidth = 1.2
-    ctx.stroke()
-
-    // Height lane ticks
-    for (const hy of HEIGHT_POSITIONS) {
-      const p0 = this.project(wallX, hy, rel0, cx, cy)
-      const p1 = this.project(wallX, hy, rel1, cx, cy)
-      ctx.globalAlpha = 0.15 * a.alpha
-      ctx.beginPath()
-      ctx.moveTo(p0.x, p0.y)
-      ctx.lineTo(p1.x, p1.y)
-      ctx.stroke()
-    }
-    ctx.restore()
-  }
-
-  private drawGapMark(
-    cx: number,
-    cy: number,
-    wallX: number,
     relStart: number,
     relEnd: number,
-    left: boolean
+    y: number,
+    edge: string
   ) {
     const ctx = this.ctx
-    const top = 1.9
-    const bot = -1.9
-    const a = this.project(wallX, top, relStart, cx, cy)
-    const b = this.project(wallX, bot, relStart, cx, cy)
-    const c = this.project(wallX, bot, relEnd, cx, cy)
-    const d = this.project(wallX, top, relEnd, cx, cy)
+    const a = this.project(0, y, relStart, cx, cy)
+    const b = this.project(0, y, relEnd, cx, cy)
+    const hw = 3.4 * Math.max(a.s, b.s) * 42
     ctx.save()
-    ctx.beginPath()
-    ctx.moveTo(a.x, a.y)
-    ctx.lineTo(b.x, b.y)
-    ctx.lineTo(c.x, c.y)
-    ctx.lineTo(d.x, d.y)
-    ctx.closePath()
-    ctx.globalAlpha = 0.65
-    ctx.fillStyle = COLORS.gap
-    ctx.fill()
-    ctx.strokeStyle = left ? COLORS.rightEdge : COLORS.leftEdge
+    ctx.globalAlpha = 0.55
+    ctx.fillStyle = '#020208'
+    const top = Math.min(a.y, b.y) - 4
+    const bot = Math.max(a.y, b.y) + 4
+    ctx.fillRect(cx - hw, top, hw * 2, bot - top)
+    ctx.strokeStyle = edge
     ctx.lineWidth = 2
-    ctx.stroke()
+    ctx.strokeRect(cx - hw, top, hw * 2, bot - top)
     ctx.restore()
   }
 
-  private drawPlayer(engine: GameEngine, cx: number, cy: number) {
+  private drawTether(engine: GameEngine, cx: number, cy: number) {
     const ctx = this.ctx
-    // Player world relative to self: x offset from center, y height, z=0
-    const p = this.project(engine.playerX, engine.playerY, 0.01, cx, cy)
-    const size = 16 * p.s
+    const a = this.project(engine.playerX, engine.floorY, 0.02, cx, cy)
+    const b = this.project(engine.playerX, engine.ceilY, 0.02, cx, cy)
+    ctx.save()
+    ctx.strokeStyle = COLORS.tether
+    ctx.globalAlpha = 0.85
+    ctx.lineWidth = 2.5
+    ctx.shadowColor = COLORS.tether
+    ctx.shadowBlur = 12
+    ctx.beginPath()
+    ctx.moveTo(a.x, a.y)
+    // slight curve
+    const mx = (a.x + b.x) / 2 + Math.sin(performance.now() * 0.008) * 4
+    const my = (a.y + b.y) / 2
+    ctx.quadraticCurveTo(mx, my, b.x, b.y)
+    ctx.stroke()
+    // energy pips along tether
+    for (let i = 1; i < 4; i++) {
+      const t = i / 4
+      const px = a.x + (b.x - a.x) * t
+      const py = a.y + (b.y - a.y) * t
+      ctx.fillStyle = COLORS.white
+      ctx.globalAlpha = 0.5
+      ctx.beginPath()
+      ctx.arc(px, py, 2, 0, Math.PI * 2)
+      ctx.fill()
+    }
+    ctx.restore()
+  }
+
+  private drawTwin(
+    engine: GameEngine,
+    which: 'floor' | 'ceiling',
+    cx: number,
+    cy: number
+  ) {
+    const ctx = this.ctx
+    const y = which === 'floor' ? engine.floorY : engine.ceilY
+    const p = this.project(engine.playerX, y, 0.02, cx, cy)
+    const size = 15 * p.s
+    const active = engine.active === which
     const col =
-      engine.wall === 'left' || engine.flipT > 0
-        ? engine.playerX < 0
-          ? COLORS.player
-          : COLORS.playerRight
-        : COLORS.playerRight
+      which === 'floor' ? COLORS.floorPlayer : COLORS.ceilingPlayer
 
     ctx.save()
-    ctx.globalAlpha = 1
+    if (active) {
+      ctx.strokeStyle = COLORS.activeRing
+      ctx.globalAlpha = 0.7
+      ctx.lineWidth = 2
+      ctx.shadowColor = col
+      ctx.shadowBlur = 18
+      ctx.strokeRect(p.x - size * 0.7, p.y - size * 0.7, size * 1.4, size * 1.4)
+    }
+    ctx.globalAlpha = active ? 1 : 0.72
     ctx.fillStyle = col
     ctx.shadowColor = col
-    ctx.shadowBlur = 16 + (engine.flipT > 0 ? 20 : 0)
-    ctx.translate(p.x, p.y)
-    if (engine.flipT > 0) {
-      ctx.rotate(engine.flipT * Math.PI)
-    }
-    ctx.fillRect(-size / 2, -size / 2, size, size)
-    // Inner face
-    ctx.fillStyle = '#ffffff44'
-    ctx.fillRect(-size * 0.2, -size * 0.2, size * 0.4, size * 0.4)
-    ctx.restore()
-
-    // Wall attachment glow
-    ctx.save()
-    ctx.globalAlpha = 0.35
-    ctx.strokeStyle = col
-    ctx.lineWidth = 2
-    ctx.beginPath()
-    ctx.arc(p.x, p.y, size * 0.9, 0, Math.PI * 2)
-    ctx.stroke()
+    ctx.shadowBlur = active ? 16 : 8
+    ctx.fillRect(p.x - size / 2, p.y - size / 2, size, size)
+    ctx.fillStyle = '#ffffff55'
+    ctx.fillRect(p.x - size * 0.18, p.y - size * 0.18, size * 0.36, size * 0.36)
     ctx.restore()
   }
 
   private drawAttract(cx: number, cy: number, t: number) {
-    const engLike = {
-      playerZ: -t * 8,
-      playerX: Math.sin(t) > 0 ? WALL_X : -WALL_X,
-      playerY: HEIGHT_POSITIONS[1]!,
-      wall: Math.sin(t) > 0 ? 'right' : 'left',
-      flipT: 0,
-      status: 'start' as const,
-      speed: 22,
-      segments: [] as SegmentData[],
-      collectedCoins: {},
-    }
-    // Simple spinning player
-    void engLike
-    const face = Math.sin(t * 2)
-    const px = face > 0 ? WALL_X * 0.9 : -WALL_X * 0.9
-    const p = this.project(px, Math.sin(t * 3) * 0.4, 0.01, cx, cy)
     const ctx = this.ctx
+    const floorY = 0.5 + Math.abs(Math.sin(t * 2)) * 1.2
+    const ceilY = TUNNEL_HEIGHT - 0.5 - Math.abs(Math.sin(t * 2 + 0.4)) * 1.0
+    const x = Math.sin(t * 0.8) * 1.2
+    const a = this.project(x, floorY, 0.02, cx, cy)
+    const b = this.project(x, ceilY, 0.02, cx, cy)
     ctx.save()
-    ctx.fillStyle = face > 0 ? COLORS.playerRight : COLORS.player
-    ctx.shadowColor = ctx.fillStyle as string
-    ctx.shadowBlur = 18
-    const s = 18
-    ctx.fillRect(p.x - s / 2, p.y - s / 2, s, s)
+    ctx.strokeStyle = COLORS.tether
+    ctx.lineWidth = 2
+    ctx.shadowColor = COLORS.tether
+    ctx.shadowBlur = 10
+    ctx.beginPath()
+    ctx.moveTo(a.x, a.y)
+    ctx.lineTo(b.x, b.y)
+    ctx.stroke()
+    ctx.fillStyle = COLORS.floorPlayer
+    ctx.fillRect(a.x - 8, a.y - 8, 16, 16)
+    ctx.fillStyle = COLORS.ceilingPlayer
+    ctx.fillRect(b.x - 8, b.y - 8, 16, 16)
     ctx.restore()
-
-    // Fake approaching hazards
-    for (let i = 0; i < 4; i++) {
-      const z = -8 - ((t * 12 + i * 14) % 50)
-      const left = i % 2 === 0
-      const p2 = this.project(left ? -WALL_X : WALL_X, HEIGHT_POSITIONS[i % 3]!, z, cx, cy)
-      ctx.save()
-      ctx.globalAlpha = p2.alpha
-      ctx.fillStyle = i % 3 === 0 ? COLORS.barrier : COLORS.wall
-      ctx.fillRect(p2.x - 6 * p2.s, p2.y - 10 * p2.s, 12 * p2.s, 16 * p2.s)
-      ctx.restore()
-    }
   }
 
   private updateParticles(dt: number) {
@@ -453,8 +405,4 @@ export class WallRenderer {
       ctx.restore()
     }
   }
-}
-
-function SEGMENT_FRAC(i: number, steps: number) {
-  return i / steps
 }

@@ -1,8 +1,8 @@
 {
-  "name": "wall-run-switch",
+  "name": "link-twin",
   "version": "1.0.0",
   "private": true,
-  "description": "Endless neon wall-run switcher ? flip left/right walls, offline, no backend",
+  "description": "Link Twin ? dual tethered neon runners (floor + ceiling), offline, no backend",
   "scripts": {
     "dev": "next dev",
     "build": "next build",

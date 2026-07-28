@@ -1,4 +1,10 @@
-export type GameSfx = 'flip' | 'jump' | 'coin' | 'crash' | 'nearMiss' | 'beat'
+export type GameSfx =
+  | 'jump'
+  | 'switch'
+  | 'coin'
+  | 'crash'
+  | 'nearMiss'
+  | 'tether'
 
 export const DEFAULT_MASTER_VOLUME = 0.85
 export const VOLUME_STEP = 0.1
@@ -20,11 +26,9 @@ class SoundManager {
       this.listeners.delete(cb)
     }
   }
-
   private notify() {
     for (const fn of this.listeners) fn()
   }
-
   getMuted() {
     return this.muted
   }
@@ -44,14 +48,11 @@ class SoundManager {
   toggleMute() {
     this.setMuted(!this.muted)
   }
-
   private applyGain() {
     if (!this.master) return
     this.master.gain.value = this.muted ? 0 : this.masterVolume
   }
-
   async load(): Promise<void> {}
-
   async unlock(): Promise<void> {
     if (typeof window === 'undefined') return
     if (!this.ctx) {
@@ -68,7 +69,6 @@ class SoundManager {
     if (this.ctx.state === 'suspended') await this.ctx.resume().catch(() => {})
     this.unlocked = true
   }
-
   dispose() {
     this.stopRun()
     if (this.ctx) void this.ctx.close().catch(() => {})
@@ -76,42 +76,39 @@ class SoundManager {
     this.master = null
     this.unlocked = false
   }
-
   startRun() {
     this.runWanted = true
   }
   stopRun() {
     this.runWanted = false
   }
-
   play(sfx: GameSfx) {
     if (!this.unlocked || this.muted || !this.ctx || !this.master) return
     switch (sfx) {
-      case 'flip':
-        this.blip(320, 0.06, 'square', 0.1)
-        this.blip(640, 0.08, 'square', 0.08, 0.04)
-        break
       case 'jump':
-        this.blip(280, 0.05, 'triangle', 0.08)
-        this.blip(420, 0.06, 'triangle', 0.06, 0.03)
+        this.blip(300, 0.05, 'triangle', 0.09)
+        this.blip(480, 0.06, 'triangle', 0.07, 0.03)
+        break
+      case 'switch':
+        this.blip(520, 0.04, 'square', 0.09)
+        this.blip(360, 0.05, 'square', 0.07, 0.03)
         break
       case 'coin':
         this.blip(880, 0.05, 'sine', 0.1)
         this.blip(1180, 0.06, 'sine', 0.07, 0.04)
         break
       case 'nearMiss':
-        this.blip(200, 0.04, 'sawtooth', 0.05)
+        this.blip(220, 0.04, 'sawtooth', 0.05)
+        break
+      case 'tether':
+        this.blip(180, 0.08, 'sine', 0.05)
         break
       case 'crash':
         this.noiseBurst(0.18, 0.22)
         this.blip(100, 0.2, 'sawtooth', 0.18)
         break
-      case 'beat':
-        if (this.runWanted) this.blip(160, 0.03, 'sine', 0.03)
-        break
     }
   }
-
   private blip(
     freq: number,
     dur: number,
@@ -135,7 +132,6 @@ class SoundManager {
     osc.start(t0)
     osc.stop(t0 + dur + 0.02)
   }
-
   private noiseBurst(dur: number, gain: number) {
     const ctx = this.ctx
     const master = this.master
